@@ -46,6 +46,7 @@ Three ways in, all running on this machine:
 
 agentd also serves a dashboard at **http://cam-pc:8780** (or `http://<tailscale IP>:8780`). Open it on your phone with Tailscale connected; adding it to your home screen makes it feel like an app.
 
+- **Pull down to refresh** at the top of the Agents and System pages, like a native app.
 - **Waiting on you:** agents that finished since you last looked, and terminal/Remote Control sessions waiting on a permission prompt.
 - **Agents:** each agent's state, current command and a timeline of the last 2 hours. Each tick is a tool call, and ▲ marks a message you sent mid-run. Stop agents from here (tap twice).
 - **Agent page:** the conversation with tool calls and the files it sent (images inline). Reply or steer from the message box (it is also posted in the Discord thread). Attach files with the paperclip, by pasting a screenshot, or by dropping them on the chat; the new-agent form takes files too. They land in the agent's inbox like Discord uploads, and ones under Discord's 10 MB cap are mirrored into the thread, change effort, copy the resume command.

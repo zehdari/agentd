@@ -175,6 +175,7 @@ const ICONS = {
   ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v6H4V6h6"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
   auto: '<circle cx="12" cy="12" r="9"/><path d="M12 3v18a9 9 0 0 0 0-18z" fill="currentColor"/>',
 };
 function icon(name, cls = "i") {
@@ -907,7 +908,7 @@ addEventListener("scroll", () => {
 }, { passive: true });
 
 let timer = null, failures = 0, seq = 0;
-async function refresh() {
+async function refresh(manual = false) {
   clearTimeout(timer);
   const mine = ++seq;   // a newer refresh (or a page switch) makes this one's result stale
   try {
@@ -947,7 +948,7 @@ async function refresh() {
   } catch (err) {
     console.error(err);
     failures++;
-    if (failures > 1) {
+    if (failures > 1 || manual) {   // a pull to refresh reports the first failure too
       $("#offline").hidden = false;
       $("#offline").textContent = `Can’t reach agentd (${err.message || err}). Retrying…`;
     }
@@ -956,6 +957,66 @@ async function refresh() {
   if (mine === seq) timer = setTimeout(refresh, document.hidden ? 30000 : pollMs());
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+
+// Pull down from the top of a list page to refresh. The home-screen app has no browser pull to
+// refresh, and in a browser tab this refreshes the data instead of reloading the whole page.
+// (The chat page is left alone: scrolling to its top loads earlier messages.)
+const PULL_AT = 64, PULL_REST = 52, PULL_MAX = 110;
+const pull = { y0: null, x0: 0, on: false, dist: 0, busy: false, timer: null };
+// The page under the top bar slides down by `dist`, uncovering the spinner that sits in the gap.
+function setPull(dist, cls = "") {
+  let el = $("#ptr");
+  if (!el) {
+    el = Object.assign(document.createElement("div"), { id: "ptr", innerHTML: icon("refresh") });
+    el.setAttribute("aria-hidden", "true");
+    document.body.append(el);
+  }
+  pull.dist = dist;
+  clearTimeout(pull.timer);
+  const body = document.body;
+  body.classList.add("pulling");
+  body.classList.toggle("pull-settle", cls.includes("settle"));
+  body.style.setProperty("--pull", `${dist}px`);
+  if (!dist) pull.timer = setTimeout(() => body.classList.remove("pulling", "pull-settle"), 400);   // after sliding back
+  el.className = `ptr ${cls}`;
+  el.style.top = `${$("#topbar").getBoundingClientRect().bottom + dist / 2}px`;
+  el.style.opacity = Math.min(1, dist / PULL_AT);
+  el.firstChild.style.transform = cls.includes("busy") ? "" : `rotate(${Math.round(dist / PULL_AT * 270)}deg)`;
+}
+addEventListener("touchstart", e => {
+  pull.y0 = null;
+  if (AGENT_ID || pull.busy || e.touches.length !== 1 || window.scrollY > 0) return;
+  if (e.target.closest("input, textarea, select, dialog")) return;
+  pull.y0 = e.touches[0].clientY;
+  pull.x0 = e.touches[0].clientX;
+  pull.on = false;
+}, { passive: true });
+addEventListener("touchmove", e => {
+  if (pull.y0 == null) return;
+  const dy = e.touches[0].clientY - pull.y0, dx = e.touches[0].clientX - pull.x0;
+  if (!pull.on) {
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;   // not sure which way yet
+    if (dy <= 0 || Math.abs(dx) > dy || window.scrollY > 0) { pull.y0 = null; return; }   // a scroll or a swipe
+    pull.on = true;
+  }
+  e.preventDefault();   // no rubber band while pulling
+  const dist = Math.min(PULL_MAX, Math.max(0, dy * 0.5));
+  setPull(dist, dist >= PULL_AT ? "ready" : "");
+}, { passive: false });
+async function endPull() {
+  if (pull.y0 == null) return;
+  const go = pull.on && pull.dist >= PULL_AT;
+  pull.y0 = null;
+  pull.on = false;
+  if (!go) { if (pull.dist) setPull(0, "settle"); return; }
+  pull.busy = true;
+  setPull(PULL_REST, "settle busy");
+  await Promise.all([refresh(true), new Promise(r => setTimeout(r, 450))]);   // long enough to see it spin
+  setPull(0, "settle");
+  pull.busy = false;
+}
+addEventListener("touchend", endPull);
+addEventListener("touchcancel", endPull);
 
 // Switch pages without reloading: draw from cache straight away, then fetch fresh data.
 function navigate(url, push = true) {
