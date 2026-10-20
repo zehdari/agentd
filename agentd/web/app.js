@@ -515,7 +515,7 @@ function agentsSection(d) {
       <div class="tabs" role="tablist">${tab("all", "All")}${tab("running", "Running")}${tab("waiting", "Waiting")}${tab("finished", "Finished")}</div>
       <span class="legend"><svg viewBox="0 0 20 10" class="lg" aria-hidden="true"><line x1="1" x2="19" y1="7" y2="7" class="lg-course"/><line x1="6" x2="6" y1="5" y2="1" class="lg-sound"/><line x1="11" x2="11" y1="5" y2="2" class="lg-sound"/></svg> each tick is a tool call</span>
     </div>
-    ${shown.length ? `<table class="grid">
+    ${shown.length ? `<table class="grid${String(ui.confirm).startsWith("delete:") ? " confirming" : ""}">
       <thead><tr><th class="c-state">State</th><th>Task</th><th class="c-track">${axis(d.now, d.window)}</th><th class="c-num">Turns</th><th class="c-act"><span class="sr">Actions</span></th></tr></thead>
       <tbody>${shown.map(a => agentRow(a, d)).join("")}</tbody>
     </table>` : `<p class="empty">${empty}</p>`}
