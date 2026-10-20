@@ -17,7 +17,7 @@ from .activity import ActivityRelay
 from .format import ATTACHED, fmt_duration, short, tables_to_code, tool_full, tool_line, tool_result_text, truncate
 from .runner import CodexRun, Run, make_run
 from .server import start_server
-from .web import start_web
+from .web import record_sent, start_web
 from .state import Agent, State
 from .sysinfo import snapshot
 from .ui import NULL_FEED, Feed, FullView
@@ -178,6 +178,8 @@ class AgentBot(discord.Client):
     async def deliver(self, thread_id, files: list[str], message: str, alert: bool) -> None:
         """Back end of `agentd-send`: post files/message to an agent's thread (or #alerts)."""
         agent = self.state.agents.get(int(thread_id)) if thread_id else None
+        if agent is not None:
+            record_sent(agent.thread_id, files, message)   # the dashboard shows it from here
         if agent is not None and not agent.discord:
             return  # no thread to post to; the dashboard shows files sent with agentd-send
         if self.ch_alerts is None:

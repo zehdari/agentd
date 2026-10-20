@@ -3,6 +3,8 @@
 Served on the tailnet (and localhost) at AGENTD_WEB_PORT. Requests from other tailnet devices are
 only accepted when `tailscale whois` says they belong to this machine's own Tailscale user."""
 import asyncio
+import glob
+import hashlib
 import ipaddress
 import json
 import logging
@@ -30,6 +32,34 @@ TAILNET = [ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115
 UNIT_NAME = re.compile(r"^[\w@.:-]+$")
 INBOX = config.STATE_DIR / "inbox"     # files you attach, from Discord or here
 MAX_UPLOAD = int(os.environ.get("AGENTD_WEB_MAX_UPLOAD_MB", "2048")) * 1024 * 1024   # per message
+SENT_DIR = config.STATE_DIR / "sent"   # <thread>.jsonl: what agentd-send actually delivered
+PDF_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agentd" / "pdf"
+PDF_WIDTH = 1400                       # px; phones zoom in from here
+PDF_MAX_PAGES = 300
+
+
+def sent_since() -> float:
+    """When agentd started recording sends. Older sends are only known from the command text."""
+    marker = SENT_DIR / ".since"
+    try:
+        return float(marker.read_text())
+    except (OSError, ValueError):
+        SENT_DIR.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        marker.write_text(str(now))
+        return now
+
+
+SENT_SINCE = sent_since()
+
+
+def record_sent(thread_id, paths: list[str], caption: str) -> None:
+    """Called by agentd-send's back end once the files are known to exist."""
+    if not thread_id or not paths:
+        return
+    entry = {"t": time.time(), "paths": [str(Path(p).resolve()) for p in paths], "caption": caption}
+    with open(SENT_DIR / f"{int(thread_id)}.jsonl", "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 async def run(*cmd: str, timeout: float = 5) -> str:
@@ -128,7 +158,9 @@ def sent_files(command: str, cwd: str) -> tuple[list[str], str]:
                 caption = args[i + 1] if i + 1 < len(args) else ""
                 skip = True
             elif not w.startswith("-") and ("." in Path(w).name or "/" in w):
-                paths.append(str(Path(base, os.path.expanduser(w)).resolve()))
+                full = str(Path(base, os.path.expanduser(w)))
+                matches = sorted(glob.glob(full)) if glob.has_magic(full) else [full]
+                paths += [str(Path(m).resolve()) for m in matches]
     return paths, caption
 
 
@@ -155,12 +187,58 @@ def entry_list(entries: list[dict]) -> list[dict]:
             for e in entries]
 
 
+# ---------------------------------------------------------------- PDFs as page images
+# Phone browsers only draw the first page of a PDF in an iframe, so the viewer shows rendered pages.
+
+PDF_MAX_PIXELS = 12_000_000   # iOS Safari won't decode much bigger images
+PDF_SIZE = re.compile(r"^Page\s+(\d+) size:\s*([\d.]+) x ([\d.]+)", re.M)
+pdf_jobs = asyncio.Semaphore(2)
+
+
+async def pdf_info(path: str) -> list[tuple[float, float]]:
+    """Each page's (width, height) in points."""
+    out = await run("pdfinfo", "-f", "1", "-l", str(PDF_MAX_PAGES), path, timeout=20)
+    return [(float(w), float(h)) for _, w, h in PDF_SIZE.findall(out)]
+
+
+def pdf_scale(w: float, h: float) -> tuple[int, int]:
+    x = PDF_WIDTH
+    if x * x * h / w > PDF_MAX_PIXELS:
+        x = int((PDF_MAX_PIXELS * w / h) ** 0.5)
+    return x, max(1, round(x * h / w))
+
+
+async def pdf_page(path: str, n: int) -> Path | None:
+    st = Path(path).stat()
+    key = hashlib.sha1(f"{path}\0{st.st_mtime_ns}\0{st.st_size}".encode()).hexdigest()[:20]
+    out = PDF_CACHE / f"{key}-{n}.png"
+    if out.is_file():
+        return out
+    sizes = await pdf_info(path)
+    if not 1 <= n <= len(sizes):
+        return None
+    x, y = pdf_scale(*sizes[n - 1])
+    PDF_CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = PDF_CACHE / f".{key}-{n}-{os.getpid()}"
+    async with pdf_jobs:
+        await run("pdftoppm", "-png", "-f", str(n), "-l", str(n), "-singlefile",
+                  "-scale-to-x", str(x), "-scale-to-y", str(y), path, str(tmp), timeout=90)
+    try:
+        Path(f"{tmp}.png").replace(out)
+    except OSError:
+        return None
+    return out
+
+
 class AgentLog:
     """Incrementally parsed stream-json log of one agent thread."""
 
     def __init__(self, path: Path, cwd: str):
         self.path, self.cwd = path, cwd
         self.offset = 0
+        self.sent_path = SENT_DIR / path.name
+        self.sent_offset = 0
+        self.unsent: deque = deque()     # agentd-send records not yet placed among the entries
         self.entries: list[dict] = []
         self.ticks: list[tuple[float, str]] = []
         self.steers: list[float] = []
@@ -184,19 +262,47 @@ class AgentLog:
             return self
         if size < self.offset:
             self.__init__(self.path, self.cwd)
-        if size == self.offset:
-            return self
-        with open(self.path, "rb") as f:
-            f.seek(self.offset)
-            data = f.read()
+        self._read_sent()
+        if size != self.offset:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                data = f.read()
+            end = data.rfind(b"\n") + 1
+            self.offset += end
+            for raw in data[:end].splitlines():
+                try:
+                    ev = json.loads(raw)
+                    self._place_sent(parse_ts(ev.get("timestamp")))
+                    self._event(ev)
+                except (ValueError, AttributeError, TypeError):
+                    continue
+        self._place_sent(None)   # anything recorded so far happened before whatever the log says next
+        return self
+
+    def _read_sent(self) -> None:
+        try:
+            if self.sent_path.stat().st_size <= self.sent_offset:
+                return
+            with open(self.sent_path, "rb") as f:
+                f.seek(self.sent_offset)
+                data = f.read()
+        except OSError:
+            return
         end = data.rfind(b"\n") + 1
-        self.offset += end
+        self.sent_offset += end
         for raw in data[:end].splitlines():
             try:
-                self._event(json.loads(raw))
-            except (ValueError, AttributeError, TypeError):
+                rec = json.loads(raw)
+                self.unsent.append((float(rec["t"]), list(rec["paths"]), str(rec.get("caption") or "")))
+            except (ValueError, KeyError, TypeError):
                 continue
-        return self
+
+    def _place_sent(self, before: float | None) -> None:
+        """Add the sends recorded before time `before` (all of them for None) as file entries."""
+        while self.unsent and (before is None or self.unsent[0][0] <= before):
+            t, paths, caption = self.unsent.popleft()
+            self.entries.append({"kind": "file", "t": t, "paths": paths, "caption": caption})
+            self.files += [{"path": p, "t": t, "caption": caption} for p in paths]
 
     def _at(self, t: float | None) -> float | None:
         if t is None:
@@ -250,7 +356,7 @@ class AgentLog:
                         self.ticks.append((t, name))
                     if name == "Bash":
                         cmd = (block.get("input") or {}).get("command", "")
-                        if "agentd-send" in cmd:
+                        if "agentd-send" in cmd and (t or 0) < SENT_SINCE:   # newer sends are recorded
                             paths, caption = sent_files(cmd, self.cwd)
                             if paths:
                                 item = {"kind": "file", "t": t, "paths": paths, "caption": caption}
@@ -826,11 +932,29 @@ def make_app(bot) -> web.Application:
             raise web.HTTPBadRequest(text="before must be a number")
         return web.json_response(dash.agent_history(agent_or_404(request), before))
 
-    async def file(request):
+    def known_path(request) -> str:
         path = request.query.get("path", "")
         if not dash.known_file(path) or not Path(path).is_file():
             raise web.HTTPNotFound(text="unknown file")
-        return web.FileResponse(path)
+        return path
+
+    async def file(request):
+        return web.FileResponse(known_path(request))
+
+    async def pdf_pages(request):
+        sizes = await pdf_info(known_path(request))
+        return web.json_response({"pages": [pdf_scale(w, h) for w, h in sizes]})
+
+    async def pdf_png(request):
+        path = known_path(request)
+        try:
+            n = int(request.query.get("page", "1"))
+        except ValueError:
+            raise web.HTTPBadRequest(text="bad page")
+        out = await pdf_page(path, n)
+        if out is None:
+            raise web.HTTPNotFound(text="no such page")
+        return web.FileResponse(out, headers={"Cache-Control": "private, max-age=86400"})
 
     async def new_agent(request):
         data, uploads = await read_form(request)
@@ -947,7 +1071,8 @@ def make_app(bot) -> web.Application:
         *[web.get(f"/{name}", page) for name in ("usage", "jobs", "files", "machine", "settings")],
         web.get("/api/overview", overview), web.get("/api/agents/{id}", agent_detail),
         web.get("/api/agents/{id}/history", agent_history),
-        web.get("/api/file", file), web.get("/api/models", model_catalog),
+        web.get("/api/file", file), web.get("/api/pdf/pages", pdf_pages), web.get("/api/pdf/page", pdf_png),
+        web.get("/api/models", model_catalog),
         web.post("/api/agents", new_agent), web.post("/api/agents/{id}/message", message),
         web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/effort", effort),
         web.post("/api/agents/{id}/seen", seen), web.post("/api/jobs/{unit}/stop", stop_job),

@@ -768,6 +768,9 @@ pre.code code { background: none; padding: 0; }
 .viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
 .viewer-body iframe { width: 100%; height: 100%; border: 0; border-radius: 4px; background: #fff; }
 .viewer-body:focus { outline: none; }
+.viewer-body.pdf { display: block; }
+.pdf-pages img { display: block; width: 100%; max-width: 900px; height: auto; max-height: none; margin: 0 auto 8px; background: #fff; border-radius: 2px; }
+.pdf-note { text-align: center; color: #aab4be; margin: 12px 0; }
 /* desktop has the rail (with System), so the top-bar gear is for phones only */
 @media (min-width: 721px) { .topbar .system-btn { display: none; } .topbar .new-btn, .topbar .system-btn + .new-btn { margin-left: auto; } }
 

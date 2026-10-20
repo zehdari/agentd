@@ -143,7 +143,8 @@ function fileTiles(paths, exists) {
   return paths.map((p, k) => {
     const name = baseName(p);
     const img = IMG_RE.test(name);
-    if (exists && !exists[k]) return `<span class="attach gone">${icon(img ? "image" : "files", "i ft")}<span><b>${esc(name)}</b> deleted</span></span>`;
+    // Gone when this entry was loaded; tapping checks again, since the file may be there now.
+    if (exists && !exists[k]) return `<a class="attach gone" href="${fileUrl(p)}" data-view="${img ? "image" : "file"}" data-recheck data-name="${esc(name)}">${icon(img ? "image" : "files", "i ft")}<span><b>${esc(name)}</b> deleted</span></a>`;
     return img ? `<a class="thumb" href="${fileUrl(p)}" data-view="image" data-name="${esc(name)}"><img src="${fileUrl(p)}" alt="${esc(name)}" loading="lazy"><span>${esc(name)}</span></a>`
       : `<a class="attach" href="${fileUrl(p)}" data-view="file" data-name="${esc(name)}">${icon("files", "i ft")}<span><b>${esc(name)}</b></span></a>`;
   }).join("");
@@ -1256,15 +1257,31 @@ function openViewer(href, name, kind) {
       if (history.state && history.state.viewer) { ui.ignorePop = true; history.back(); }
     });
   }
-  const body = kind === "image"
-    ? `<img src="${href}" alt="${esc(name)}">`
+  const pdf = kind === "file" && /\.pdf$/i.test(name);
+  const body = kind === "image" ? `<img src="${href}" alt="${esc(name)}">`
+    : pdf ? `<div class="pdf-pages"><p class="pdf-note">Loading…</p></div>`
     : `<iframe src="${href}" title="${esc(name)}"></iframe>`;
   dlg.innerHTML = `<div class="viewer-bar"><span>${esc(name)}</span>
       <a class="icon-btn" href="${href}" download="${esc(name)}" aria-label="Download">${icon("download")}</a>
       <button class="icon-btn" type="button" id="viewer-close" aria-label="Close">${icon("close")}</button></div>
-    <div class="viewer-body" tabindex="-1" autofocus>${body}</div>`;
+    <div class="viewer-body${pdf ? " pdf" : ""}" tabindex="-1" autofocus>${body}</div>`;
   dlg.showModal();
   history.pushState({ viewer: true }, "");   // so the back gesture closes it
+  if (pdf) showPdf(dlg.querySelector(".pdf-pages"), new URL(href, location.href).searchParams.get("path"));
+}
+
+// Phone browsers only draw a PDF's first page in an iframe, so pages come from the server as images.
+async function showPdf(box, path) {
+  const q = `path=${encodeURIComponent(path)}`;
+  try {
+    const { pages } = await api(`/api/pdf/pages?${q}`);
+    if (!pages.length) throw new Error("no pages");
+    box.innerHTML = pages.map(([w, h], i) =>
+      `<img src="/api/pdf/page?${q}&page=${i + 1}" width="${w}" height="${h}" loading="lazy" alt="Page ${i + 1}">`).join("")
+      + (pages.length > 1 ? `<p class="pdf-note">${pages.length} pages</p>` : "");
+  } catch (err) {
+    box.innerHTML = `<p class="pdf-note">Couldn’t render this PDF (${esc(err.message || String(err))}). Use the download button.</p>`;
+  }
 }
 function closeViewer() {
   const dlg = $("#viewer");
@@ -1276,7 +1293,16 @@ addEventListener("popstate", () => {
 });
 document.addEventListener("click", e => {
   const a = e.target.closest("a[data-view]");
-  if (a) {
+  if (a && "recheck" in a.dataset) {
+    e.preventDefault();
+    fetch(a.getAttribute("href"), { method: "HEAD" }).then(r => {
+      if (!r.ok) return;
+      a.classList.remove("gone");
+      delete a.dataset.recheck;
+      a.querySelector("span").innerHTML = `<b>${esc(a.dataset.name || "")}</b>`;
+      openViewer(a.getAttribute("href"), a.dataset.name || "", a.dataset.view);
+    }).catch(() => {});
+  } else if (a) {
     e.preventDefault();
     openViewer(a.getAttribute("href"), a.dataset.name || "", a.dataset.view);
   } else if (e.target.closest("#viewer-close")) closeViewer();
