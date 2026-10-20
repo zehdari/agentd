@@ -1,7 +1,8 @@
 """Web dashboard: every agent, machine health and long jobs on one screen.
 
-Served on the tailnet (and localhost) at AGENTD_WEB_PORT. Requests from other tailnet devices are
-only accepted when `tailscale whois` says they belong to this machine's own Tailscale user."""
+Listens on localhost at AGENTD_WEB_PORT; Caddy serves it to the tailnet as https://agentd.zehdari.com
+(see /etc/caddy/Caddyfile). Requests from other tailnet devices are only accepted when
+`tailscale whois` says they belong to this machine's own Tailscale user."""
 import asyncio
 import glob
 import hashlib
@@ -870,8 +871,13 @@ def make_app(bot) -> web.Application:
 
     @web.middleware
     async def guard(request: web.Request, handler):
-        if not await dash.allowed(request.remote):
-            log.warning("dashboard: 403 %s %s", request.remote, request.path)
+        # Behind Caddy every request comes from loopback; judge the client Caddy forwarded for instead
+        # (Caddy replaces any X-Forwarded-For the client sent, so it can't be spoofed through the proxy).
+        client = request.remote
+        if (fwd := request.headers.get("X-Forwarded-For")) and await dash.allowed(client):
+            client = fwd.split(",")[-1].strip()
+        if not await dash.allowed(client):
+            log.warning("dashboard: 403 %s %s", client, request.path)
             return web.Response(status=403, text="Not allowed. Connect from your own Tailscale devices.")
         if request.method == "POST" and request.headers.get("X-Agentd") != "1":
             return web.Response(status=400, text="missing X-Agentd header")
@@ -1092,8 +1098,8 @@ def make_app(bot) -> web.Application:
 async def start_web(bot) -> web.AppRunner:
     runner = web.AppRunner(make_app(bot), access_log=None)
     await runner.setup()
-    # IPv4 and IPv6 on all interfaces (asyncio makes "::" IPv6-only); access is checked per request.
-    for host in ("0.0.0.0", "::"):
+    # Loopback only; Caddy terminates HTTPS on the Tailscale IP. Access is still checked per request.
+    for host in ("127.0.0.1", "::1"):
         await web.TCPSite(runner, host, config.WEB_PORT).start()
     log.info("dashboard on port %d", config.WEB_PORT)
     return runner
