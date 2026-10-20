@@ -143,6 +143,7 @@ class AgentBot(discord.Client):
             if agent.status != "running":
                 continue
             agent.status = "interrupted"
+            agent.updated = time.time()   # unread on the dashboard until you open it
             if not agent.discord:
                 continue
             try:

@@ -416,7 +416,7 @@ function waitingBand(d) {
       <div class="w-body">
         <a class="w-title" href="/agents/${a.id}">${esc(a.title)}</a>
         ${a.reply ? `<p class="w-quote">${esc(a.reply)}</p>` : ""}
-        <p class="w-meta"><code>${esc(a.cwd)}</code> · ${a.raw_status === "error" ? "failed" : "finished"} ${esc(ago(a.updated, d.now))} · ${a.turns} turns</p>
+        <p class="w-meta"><code>${esc(a.cwd)}</code> · ${{ error: "failed", interrupted: "cut off by a restart" }[a.raw_status] || "finished"} ${esc(ago(a.updated, d.now))} · ${a.turns} turns</p>
       </div>
       <div class="w-act"><a class="btn" href="/agents/${a.id}#reply">${icon("reply")}<span>Reply</span></a>
         <button class="icon-btn" type="button" data-seen="${a.id}" aria-label="Mark as read" title="Mark as read">${icon("check")}</button></div>
@@ -841,7 +841,6 @@ function renderDetail(d) {
             <input type="file" id="attach-input" multiple hidden>
             <textarea id="m" rows="1" placeholder="Reply to Claude"></textarea>
             <button class="send" type="submit" aria-label="Send">${icon("send")}</button></form>
-          <p class="hint" id="composer-hint"></p>
         </section>
         <aside class="details" id="details"></aside>
       </div>`;
@@ -870,8 +869,6 @@ function renderDetail(d) {
     $(".convo").innerHTML = convoHtml(d);
     if (ui.firstDetail ? location.hash !== "#top" : nearBottom) window.scrollTo(0, document.body.scrollHeight);
   }
-  $("#composer-hint").textContent = (d.status === "running"
-    ? "It reads this after its current step." : "Continues the same session.") + (d.url ? " Also posted in Discord." : "");
   if (ui.firstDetail && location.hash === "#reply") $("#m").focus();
   ui.firstDetail = false;
   $("#details").innerHTML = detailsHtml(d);

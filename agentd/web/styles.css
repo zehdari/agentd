@@ -243,8 +243,8 @@ th.c-num { font-style: normal; }
 .doing code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
 
 /* finished rows print desaturated */
-.row-done, .row-stopped { color: var(--ink-2); }
-.row-done .task, .row-stopped .task { font-weight: 500; }
+.row-done, .row-stopped, .row-interrupted { color: var(--ink-2); }
+.row-done .task, .row-stopped .task, .row-interrupted .task { font-weight: 500; }
 
 /* state chips */
 .state { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 12px; white-space: nowrap; }
@@ -258,6 +258,8 @@ th.c-num { font-style: normal; }
 .state-done, .state-stopped { color: var(--ink-3); font-weight: 500; }
 .state-done i { background: transparent; border: 1.5px solid var(--ink-3); }
 .state-stopped i { background: var(--ink-3); border-radius: 1px; }
+.state-interrupted { color: var(--ink-3); font-weight: 500; }
+.state-interrupted i { background: transparent; border: 1.5px dashed var(--ink-3); }
 
 /* ------------------------------------------------ track lines (signature) */
 .axis { position: relative; height: 14px; font-weight: 500; font-style: italic; }
@@ -418,8 +420,8 @@ th.c-num { font-style: normal; }
   .c-act { grid-area: act; margin: -8px 0 -6px; }
   .c-act .icon-btn { width: 40px; height: 40px; }
   .doing { margin-top: 4px; }
-  .row-done .c-track, .row-stopped .c-track { display: none; }
-  .row-done, .row-stopped { grid-template-areas: "state act" "task task" !important; }
+  .row-done .c-track, .row-stopped .c-track, .row-interrupted .c-track { display: none; }
+  .row-done, .row-stopped, .row-interrupted { grid-template-areas: "state act" "task task" !important; }
 
   .side { grid-template-columns: 1fr; }
   .list li { padding: 11px 0; }
