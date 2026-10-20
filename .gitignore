@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+# local backups and one-off helper scripts
+.agentd-before-*/
+agentd.failed/
+.restart-*.sh
+.codex-login-loop.sh
+# design mockups and screenshots (large)
+mockups/

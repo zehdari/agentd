@@ -1,0 +1,14 @@
+[Unit]
+Description=Claude Code Remote Control for the whole machine (attach: tmux -L claude-rc attach)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/tmux -L claude-rc new-session -d -s rc -c %h /bin/bash -lc %h/agents/bin/claude-rc-loop
+ExecStop=/usr/bin/tmux -L claude-rc kill-server
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

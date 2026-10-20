@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Keeps Remote Control serving the whole machine (from ~). Run inside tmux by claude-rc.service.
+cd "$HOME" || exit 1
+while true; do
+  claude remote-control --spawn=same-dir --permission-mode bypassPermissions
+  echo "remote-control exited ($?); restarting in 10s"
+  sleep 10
+done

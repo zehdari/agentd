@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>agentd</title>
+<script>
+  (function () {
+    var pref = localStorage.getItem("agentd-theme") || "auto";
+    var dark = pref === "dark" || (pref === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    if (localStorage.getItem("agentd-rail") === "hidden") document.documentElement.dataset.rail = "hidden";
+  })();
+</script>
+<meta name="theme-color" content="#f4e5b2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#26221a" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='%2315181c'/%3E%3Cpath d='m15.5 8.5-2 5-5 2 2-5z' fill='%23f4e5b2'/%3E%3C/svg%3E">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="agentd">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="shell">
+  <button class="rail-toggle icon-btn" id="rail-toggle" type="button"></button>
+  <aside class="rail">
+    <div class="host"><span class="host-name" id="host">agentd</span><span class="host-meta" id="host-meta">connecting…</span></div>
+    <nav aria-label="Main" id="nav"></nav>
+    <div class="services" id="services"></div>
+    <button class="theme-toggle" id="theme" type="button"></button>
+  </aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <p class="offline" id="offline" hidden></p>
+    <div id="new-agent"></div>
+    <div id="view"><p class="loading">Loading…</p></div>
+  </div>
+</div>
+<nav class="tabbar" aria-label="Main" id="tabbar"></nav>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+[Unit]
+Description=agentd: Discord control for Claude Code agents
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/agents
+EnvironmentFile=%h/agents/.env
+# Login shell so agents get the same PATH as a terminal (~/.local/bin, etc.).
+ExecStart=/bin/bash -lc 'exec %h/agents/.venv/bin/python -m agentd'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
