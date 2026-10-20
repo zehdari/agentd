@@ -232,7 +232,10 @@ th.c-num { font-style: normal; }
 .c-track { width: 230px; }
 .grid td.c-track { padding-right: 14px; }
 .c-act { width: 84px; text-align: right; }   /* delete + open */
-.grid.confirming .c-act { width: 116px; }     /* "Delete?" + open, only while it's asking */
+@media (min-width: 721px) {   /* asking "Delete?": that row's buttons reach into the turns cell, and its number moves over */
+  .grid tr.confirming .c-act .acts { margin-left: -32px; }
+  .grid tr.confirming .c-num span { display: inline-block; transform: translateX(-32px); }
+}
 .c-act .acts { display: flex; justify-content: flex-end; align-items: center; gap: 2px; }
 .icon-btn.quiet-danger { color: var(--ink-3); }
 .icon-btn.quiet-danger:hover { color: var(--red); background: var(--danger-tint); }

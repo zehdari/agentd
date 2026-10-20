@@ -474,12 +474,12 @@ function agentRow(a, d) {
   const doing = st === "running" && a.now_doing
     ? `<span class="doing">${icon("term", "i i-sm")}<code>${esc(a.now_doing)}</code></span>` : "";
   const queued = a.queued ? ` · ${a.queued} queued` : "";
-  return `<tr class="row-${st}">
+  return `<tr class="row-${st}${ui.confirm === `delete:${a.id}` ? " confirming" : ""}">
     <td class="c-state">${stateChip(st)}</td>
     <td class="c-task"><a href="/agents/${a.id}" class="task">${esc(a.title)}</a>
       <span class="sub"><code>${esc(a.cwd)}</code><span>${esc(a.model_label || a.model || "default")}${effort}</span><span class="when">${esc(time)}${queued}</span></span>${doing}</td>
     <td class="c-track">${track(a, d.now, d.window)}</td>
-    <td class="c-num">${a.turns}</td>
+    <td class="c-num"><span>${a.turns}</span></td>
     <td class="c-act"><div class="acts">${action}</div></td>
   </tr>${(d.jobs || []).filter(j => j.active && j.agent === a.id).map(j => jobSubRow(j, d.now)).join("")}`;
 }
@@ -515,7 +515,7 @@ function agentsSection(d) {
       <div class="tabs" role="tablist">${tab("all", "All")}${tab("running", "Running")}${tab("waiting", "Waiting")}${tab("finished", "Finished")}</div>
       <span class="legend"><svg viewBox="0 0 20 10" class="lg" aria-hidden="true"><line x1="1" x2="19" y1="7" y2="7" class="lg-course"/><line x1="6" x2="6" y1="5" y2="1" class="lg-sound"/><line x1="11" x2="11" y1="5" y2="2" class="lg-sound"/></svg> each tick is a tool call</span>
     </div>
-    ${shown.length ? `<table class="grid${String(ui.confirm).startsWith("delete:") ? " confirming" : ""}">
+    ${shown.length ? `<table class="grid">
       <thead><tr><th class="c-state">State</th><th>Task</th><th class="c-track">${axis(d.now, d.window)}</th><th class="c-num">Turns</th><th class="c-act"><span class="sr">Actions</span></th></tr></thead>
       <tbody>${shown.map(a => agentRow(a, d)).join("")}</tbody>
     </table>` : `<p class="empty">${empty}</p>`}
