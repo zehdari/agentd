@@ -285,7 +285,8 @@ function track(a, now, win, { w = 240, h = 30, big = false } = {}) {
 
 function axis(now, win) {
   const lo = now - win, labels = [];
-  for (let m = Math.ceil(lo / 1800) * 1800; m < now - 720; m += 1800) {
+  // Stop short of the right edge so the last time label never runs into "now".
+  for (let m = Math.ceil(lo / 1800) * 1800; m < now - win * 0.22; m += 1800) {
     labels.push(`<span style="left:${((m - lo) / win * 100).toFixed(2)}%">${hm(m)}</span>`);
   }
   labels.push('<span class="now" style="left:100%">now</span>');
@@ -1172,8 +1173,9 @@ document.addEventListener("submit", async e => {
 });
 
 document.addEventListener("keydown", e => {
-  // Enter sends on a keyboard; Shift+Enter (or any Enter on a phone) makes a new line.
-  if (e.target.id === "m" && e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(hover: hover)").matches) {
+  // With a physical keyboard Enter sends and Shift+Enter makes a new line; on a phone Enter is a new
+  // line and you tap Send. Any fine pointer or hover means a mouse/trackpad, so likely a keyboard too.
+  if (e.target.id === "m" && e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(any-hover: hover), (any-pointer: fine)").matches) {
     e.preventDefault();
     $("#composer").requestSubmit();
   }
