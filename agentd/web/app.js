@@ -1155,6 +1155,7 @@ document.addEventListener("submit", async e => {
   } else if (e.target.id === "new-form") {
     const fields = Object.fromEntries(new FormData(e.target)), err = $("#new-error");
     const btn = $("button[type=submit]", e.target), label = $("span", btn);
+    if (btn.disabled) return;   // already starting (Enter pressed twice)
     err.hidden = true;
     if (!fields.text.trim() && !ui.newFiles.length) {
       err.textContent = "Write a task for the agent, or attach files.";
@@ -1175,11 +1176,13 @@ document.addEventListener("submit", async e => {
 document.addEventListener("keydown", e => {
   // With a physical keyboard Enter sends and Shift+Enter makes a new line; on a phone Enter is a new
   // line and you tap Send. Any fine pointer or hover means a mouse/trackpad, so likely a keyboard too.
-  if (e.target.id === "m" && e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(any-hover: hover), (any-pointer: fine)").matches) {
+  // Same for the reply box and the new agent task; Ctrl/Cmd+Enter always sends.
+  const form = e.target.id === "m" ? $("#composer") : e.target.name === "text" && e.target.closest("#new-form");
+  if (!form || e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+  if (e.ctrlKey || e.metaKey || matchMedia("(any-hover: hover), (any-pointer: fine)").matches) {
     e.preventDefault();
-    $("#composer").requestSubmit();
+    form.requestSubmit();
   }
-  if (e.target.name === "text" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("#new-form").requestSubmit();
 });
 document.addEventListener("input", e => {
   if (e.target.id === "m") { fitComposer(e.target); if (AGENT_ID) saveDraft(AGENT_ID, e.target.value); }
