@@ -454,6 +454,12 @@ function agentRow(a, d) {
   } else {
     action = `<a class="icon-btn" href="/agents/${a.id}" aria-label="Open" title="Open">${icon("chev")}</a>`;
   }
+  if (st !== "running") {
+    const key = `delete:${a.id}`;
+    action = (ui.confirm === key
+      ? `<button class="btn danger sm" type="button" data-delete="${a.id}">Delete?</button>`
+      : `<button class="icon-btn quiet-danger" type="button" data-arm="${key}" aria-label="Delete chat" title="Delete">${icon("trash")}</button>`) + action;
+  }
   const doing = st === "running" && a.now_doing
     ? `<span class="doing">${icon("term", "i i-sm")}<code>${esc(a.now_doing)}</code></span>` : "";
   const queued = a.queued ? ` · ${a.queued} queued` : "";
@@ -463,7 +469,7 @@ function agentRow(a, d) {
       <span class="sub"><code>${esc(a.cwd)}</code><span>${esc(a.model_label || a.model || "default")}${effort}</span><span class="when">${esc(time)}${queued}</span></span>${doing}</td>
     <td class="c-track">${track(a, d.now, d.window)}</td>
     <td class="c-num">${a.turns}</td>
-    <td class="c-act">${action}</td>
+    <td class="c-act"><div class="acts">${action}</div></td>
   </tr>${(d.jobs || []).filter(j => j.active && j.agent === a.id).map(j => jobSubRow(j, d.now)).join("")}`;
 }
 
@@ -798,7 +804,7 @@ function detailsHtml(d) {
   return `
     <section aria-labelledby="di-h">
       <h2 id="di-h">Details</h2>
-      <p class="d-full-title">${esc(d.title)}</p>
+      <p class="d-full-title">${esc(d.prompt || d.title)}</p>
       <dl class="kv">
         <dt>Directory</dt><dd><code>${esc(d.cwd)}</code></dd>
         <dt>Model</dt><dd>${esc(d.model_label || d.model || "default")}</dd>
@@ -1110,8 +1116,7 @@ async function deleteAgent(id, btn) {
   delete cache.agents[id];
   if (cache.overview) cache.overview.agents = cache.overview.agents.filter(a => String(a.id) !== String(id));
   try { localStorage.removeItem(draftKey(id)); } catch { /* private mode */ }
-  ui.details = false;
-  navigate("/");
+  if (AGENT_ID) { ui.details = false; navigate("/"); } else { ui.confirm = null; rerender(); refresh(); }
 }
 
 async function act(fn, btn) {

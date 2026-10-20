@@ -754,6 +754,8 @@ class Dashboard:
             "resume": resume, "tools": al.tools, "total_entries": total, "entries_from": start,
             "entries": entry_list(al.entries[start:]),
             "jobs": jobs, "file_list": files, "efforts": models.efforts_for(agent.model),
+            # the title is cut to 90 characters; the Details panel shows the whole first message
+            "prompt": short(next((e["text"] for e in al.entries if e["kind"] == "you" and e["text"]), agent.title), 1000),
             "outbox": [{"t": m["t"], "text": split_attached(m["text"])[0], "state": m["state"],
                         "files": [inbox_name(p) for p in split_attached(m["text"])[1]]}
                        for m in outbox],

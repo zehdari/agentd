@@ -232,6 +232,12 @@ th.c-num { font-style: normal; }
 .c-track { width: 230px; }
 .grid td.c-track { padding-right: 14px; }
 .c-act { width: 46px; text-align: right; }
+.c-act .acts { display: flex; justify-content: flex-end; align-items: center; gap: 2px; }
+.icon-btn.quiet-danger { color: var(--ink-3); }
+.icon-btn.quiet-danger:hover { color: var(--red); background: var(--danger-tint); }
+@media (hover: hover) and (min-width: 721px) {   /* desktop: the delete button shows on the row you point at */
+  .grid tr:not(:hover) .quiet-danger:not(:focus-visible) { visibility: hidden; }
+}
 .task { font-weight: 600; text-decoration: none; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .task:hover { text-decoration: underline; }
 .sub { display: flex; align-items: center; gap: 0; color: var(--ink-3); font-size: 12px; margin-top: 2px; min-width: 0; }
@@ -572,7 +578,7 @@ pre.code code { background: none; padding: 0; }
 .details { display: none; }
 .details-open .details { display: grid; gap: 24px; position: sticky; top: 80px; max-height: calc(100vh - 96px); overflow-y: auto; padding-bottom: 16px; }
 .details h2 { margin-bottom: 8px; }
-.d-full-title { margin: 0 0 10px; font-weight: 600; line-height: 1.4; }
+.d-full-title { margin: 0 0 10px; font-weight: 600; line-height: 1.4; white-space: pre-line; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
 .details .d-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .details .d-track { padding: 8px 10px; margin: 0; }
 .details .track { height: 36px; }
