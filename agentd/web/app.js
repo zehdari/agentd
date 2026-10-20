@@ -14,6 +14,17 @@ function parseRoute() {
 }
 parseRoute();
 const pollMs = () => (AGENT_ID ? 2500 : 4000);
+// What scrolls: the middle column on desktop (so the rail and top bar stay put), the page on the phone.
+function scroller() {
+  const s = document.getElementById("scroll");
+  return s && getComputedStyle(s).overflowY === "auto" ? s : document.scrollingElement;
+}
+const toBottom = () => { const s = scroller(); s.scrollTop = s.scrollHeight; };
+// So the arrow keys, Page Down and space scroll the column before anything has been clicked.
+function focusScroller() {
+  const s = scroller();
+  if (s.id === "scroll" && (!document.activeElement || document.activeElement === document.body)) s.focus({ preventScroll: true });
+}
 
 // Last data seen per page, so switching pages draws instantly and then refreshes.
 const cache = { overview: null, agents: {} };
@@ -633,10 +644,10 @@ function usageInView() {
   return r.top < innerHeight && r.bottom > 0;
 }
 let usageScrollTimer = null;
-addEventListener("scroll", () => {
+document.addEventListener("scroll", () => {   // capture: the column's scroll events don't bubble
   clearTimeout(usageScrollTimer);
   usageScrollTimer = setTimeout(() => { if (!AGENT_ID && usageInView()) refreshUsage(); }, 300);
-}, { passive: true });
+}, { passive: true, capture: true });
 addEventListener("hashchange", () => { if (location.hash === "#usage") refreshUsage(); });
 
 // Running jobs no listed agent started (from a terminal, or an agent off the list).
@@ -874,10 +885,10 @@ function renderDetail(d) {
   const outKey = (d.outbox || []).map(m => m.state).join(",") + "|" + ui.sending.map(s => Math.floor(s.pct * 100)).join(",");
   const key = `${d.entries_from}:${ui.loadingOlder}:${d.total_entries}:${d.status}:${d.queued}:${outKey}:${[...ui.expanded].join(",")}:${Math.floor(d.now / 60)}`;
   if (key !== ui.convoKey) {
-    const nearBottom = window.innerHeight + window.scrollY > document.body.scrollHeight - 240;
+    const sc = scroller(), nearBottom = sc.clientHeight + sc.scrollTop > sc.scrollHeight - 240;
     ui.convoKey = key;
     $(".convo").innerHTML = convoHtml(d);
-    if (ui.firstDetail ? location.hash !== "#top" : nearBottom) window.scrollTo(0, document.body.scrollHeight);
+    if (ui.firstDetail ? location.hash !== "#top" : nearBottom) toBottom();
   }
   if (ui.firstDetail && location.hash === "#reply") $("#m").focus();
   ui.firstDetail = false;
@@ -910,15 +921,15 @@ async function loadOlder() {
   } catch { /* the button stays; try again on the next scroll or tap */ }
   ui.loadingOlder = false;
   if (AGENT_ID !== id || !cache.agents[id]) return;
-  const fromBottom = document.body.scrollHeight - window.scrollY;   // keep the reader's place
+  const sc = scroller(), fromBottom = sc.scrollHeight - sc.scrollTop;   // keep the reader's place
   ui.convoKey = "";
   ui.data = cache.agents[id];
   renderDetail(ui.data);
-  window.scrollTo(0, document.body.scrollHeight - fromBottom);
+  sc.scrollTop = sc.scrollHeight - fromBottom;
 }
-addEventListener("scroll", () => {
-  if (AGENT_ID && !ui.firstDetail && window.scrollY < 900 && cache.agents[AGENT_ID]?.entries_from > 0) loadOlder();
-}, { passive: true });
+document.addEventListener("scroll", () => {
+  if (AGENT_ID && !ui.firstDetail && scroller().scrollTop < 900 && cache.agents[AGENT_ID]?.entries_from > 0) loadOlder();
+}, { passive: true, capture: true });
 
 let timer = null, failures = 0, seq = 0;
 async function refresh(manual = false) {
@@ -998,7 +1009,7 @@ function setPull(dist, cls = "") {
 }
 addEventListener("touchstart", e => {
   pull.y0 = null;
-  if (AGENT_ID || pull.busy || e.touches.length !== 1 || window.scrollY > 0) return;
+  if (AGENT_ID || pull.busy || e.touches.length !== 1 || scroller().scrollTop > 0) return;
   if (e.target.closest("input, textarea, select, dialog")) return;
   pull.y0 = e.touches[0].clientY;
   pull.x0 = e.touches[0].clientX;
@@ -1009,7 +1020,7 @@ addEventListener("touchmove", e => {
   const dy = e.touches[0].clientY - pull.y0, dx = e.touches[0].clientX - pull.x0;
   if (!pull.on) {
     if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;   // not sure which way yet
-    if (dy <= 0 || Math.abs(dx) > dy || window.scrollY > 0) { pull.y0 = null; return; }   // a scroll or a swipe
+    if (dy <= 0 || Math.abs(dx) > dy || scroller().scrollTop > 0) { pull.y0 = null; return; }   // a scroll or a swipe
     pull.on = true;
   }
   e.preventDefault();   // no rubber band while pulling
@@ -1056,9 +1067,10 @@ function navigate(url, push = true) {
   } else {
     $("#view").innerHTML = `<p class="loading">Loading…</p>`;
   }
+  focusScroller();
   if (!AGENT_ID) {
     const el = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
-    if (el) { el.scrollIntoView(); ui.scrolledToHash = true; } else window.scrollTo(0, 0);
+    if (el) { el.scrollIntoView(); ui.scrolledToHash = true; } else scroller().scrollTop = 0;
   }
   refresh();
 }
@@ -1215,7 +1227,7 @@ document.addEventListener("submit", async e => {
     ui.sending.push(pending);
     ui.convoKey = "";
     rerender();
-    window.scrollTo(0, document.body.scrollHeight);
+    toBottom();
     try {
       if (files.length) {
         await upload(`/api/agents/${AGENT_ID}/message`, formWith({ text }, files), pct => {
@@ -1327,6 +1339,7 @@ if (!AGENT_ID && cache.overview) {   // last known state while the first fetch i
   renderShell(cache.overview);
   rerender();
 }
+focusScroller();
 refresh();
 loadModels();
 

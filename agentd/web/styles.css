@@ -863,3 +863,17 @@ body.pull-settle:not(.p-chat) .main > :not(.topbar) { transition: transform .35s
 .ptr.busy .i { animation: ptr-spin .8s linear infinite; }
 @keyframes ptr-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ptr.busy .i { animation-duration: 2.4s; } }
+
+/* ------------------------------------------------ desktop: only the middle column scrolls */
+/* The rail and top bar stay put, even when the column bounces at either end. The phone scrolls the page. */
+@media (min-width: 721px) {
+  html, body { height: 100%; overflow: hidden; }
+  .shell { height: 100vh; min-height: 0; }
+  .main, .p-chat .main { display: flex; flex-direction: column; height: 100vh; padding-bottom: 0; }
+  .topbar { flex: none; margin-bottom: 0; }
+  .scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -28px; padding: 20px 28px 40px; }
+  .scroll:focus { outline: none; }
+  .p-chat .scroll { padding-bottom: 0; }
+  .details-open .details { top: 0; }   /* sticks under the column's top padding, where it sat before */
+  .d-side { top: 0; }
+}
