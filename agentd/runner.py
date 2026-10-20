@@ -39,6 +39,7 @@ class Run:
             config.CLAUDE_BIN, "-p",
             "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--replay-user-messages",
+            "--thinking-display", "summarized",   # thinking text for the dashboard; omitted by default
             "--permission-mode", "bypassPermissions",
             "--append-system-prompt", SYSTEM_PROMPT,
         ]
@@ -247,6 +248,12 @@ class CodexRun(Run):
             return []
         item = ev.get("item") or {}
         itype, iid = item.get("type"), item.get("id")
+        if itype == "reasoning":
+            text = item.get("text") or ""
+            if kind != "item.completed" or not text.strip():
+                return []
+            return [{"type": "assistant", "timestamp": self._now(), "parent_tool_use_id": None,
+                     "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": text}]}}]
         if itype == "agent_message":
             text = item.get("text") or ""
             if kind != "item.completed" or not text.strip():

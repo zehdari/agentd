@@ -328,6 +328,9 @@ class AgentLog:
             self.rate = (self.last_t or time.time(), ev.get("rate_limit_info") or {})
             return
         if kind == "user" and ev.get("isReplay"):
+            if ev.get("origin"):   # Claude Code's own notices (a background task finished), not you
+                self._at(parse_ts(ev.get("timestamp")))
+                return
             in_run = bool(self.segs and self.segs[-1][2] and not self._new_run)
             t = self._at(parse_ts(ev.get("timestamp")))
             text, paths = split_attached(text_of(ev.get("message", {}).get("content")).strip())
@@ -345,6 +348,8 @@ class AgentLog:
                 if btype == "text" and block.get("text", "").strip() and not nested:
                     self.entries.append({"kind": "claude", "t": t, "text": block["text"].strip()})
                     self.last_reply = (t, block["text"].strip())
+                elif btype == "thinking" and block.get("thinking", "").strip() and not nested:
+                    self.entries.append({"kind": "thinking", "t": t, "text": block["thinking"].strip()})
                 elif btype == "tool_use":
                     name = block.get("name", "")
                     if name.startswith("mcp__"):

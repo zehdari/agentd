@@ -312,7 +312,7 @@ class AgentBot(discord.Client):
                         elif block.get("type") == "tool_use":
                             name, inp = block.get("name", ""), block.get("input")
                             await feed.tool(("↳ " if nested else "") + tool_line(name, inp), tool_full(name, inp))
-                elif kind == "user" and ev.get("isReplay"):
+                elif kind == "user" and ev.get("isReplay") and not ev.get("origin"):   # origin: Claude Code's own notices
                     read = run.unread.popleft() if run.unread else None
                     if read is not None:
                         await react(read, STEER, remove=True)

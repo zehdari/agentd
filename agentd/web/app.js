@@ -705,11 +705,13 @@ function toolSummary(group) {
   const counts = new Map();
   let other = 0;
   for (const c of group) {
+    if (c.kind === "thinking") continue;
     const kind = TOOL_WORDS.find(([names]) => names.includes(c.name));
     if (kind) counts.set(kind, (counts.get(kind) || 0) + 1); else other++;
   }
   const parts = [...counts].map(([[, verb, one, many], n]) => `${verb} ${n} ${n === 1 ? one : many}`);
   if (other) parts.push(`used ${other} other tool${other === 1 ? "" : "s"}`);
+  if (group.some(c => c.kind === "thinking")) parts.unshift("thought");
   const s = parts.join(", ");
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -729,9 +731,9 @@ function convoHtml(d) {
   };
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
-    if (e.kind === "tool") {
+    if (e.kind === "tool" || e.kind === "thinking") {   // a run of tool calls and thinking folds into one row
       const start = i;
-      while (i + 1 < entries.length && entries[i + 1].kind === "tool") i++;
+      while (i + 1 < entries.length && ["tool", "thinking"].includes(entries[i + 1].kind)) i++;
       const group = entries.slice(start, i + 1);
       stamp(group[0].t);
       const live = d.status === "running" && i === entries.length - 1;
@@ -740,9 +742,13 @@ function convoHtml(d) {
       out.push(`<div class="tools-row${live ? " live" : ""}${open ? " open" : ""}">
         <button class="tools-toggle" type="button" data-expand="${d.entries_from + start}" aria-expanded="${open}">
           ${icon("chev", "i i-sm chev")}<span class="tools-sum">${esc(toolSummary(group))}</span>
-          ${live ? `<span class="tools-now"><code>${esc(last.name)} ${esc(last.detail.split("\n")[0])}</code></span>` : ""}
+          ${live ? `<span class="tools-now">${last.kind === "thinking" ? `<em>${esc(last.text.split("\n")[0])}</em>`
+            : `<code>${esc(last.name)} ${esc(last.detail.split("\n")[0])}</code>`}</span>` : ""}
         </button>
         ${open ? `<ul class="calls full">${group.map(c => {
+          if (c.kind === "thinking") {
+            return `<li class="thought"><span class="tool">Thinking${c.t ? ` <time>${hm(c.t)}</time>` : ""}</span><div class="md">${md(c.text)}</div></li>`;
+          }
           const full = c.detail.length > 4000 ? `${c.detail.slice(0, 4000)}\n…` : c.detail;
           return `<li class="${c.nested ? "nested" : ""}"><span class="tool">${esc(c.name)}${c.t ? ` <time>${hm(c.t)}</time>` : ""}</span><pre>${esc(full)}</pre></li>`;
         }).join("")}</ul>` : ""}

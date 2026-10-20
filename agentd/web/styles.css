@@ -604,6 +604,7 @@ pre.code code { background: none; padding: 0; }
 .tools-row.open .chev { transform: rotate(90deg); }
 .tools-sum { white-space: nowrap; }
 .tools-now { min-width: 0; overflow: hidden; }
+.tools-now em { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; color: var(--channel); }
 .tools-now code { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--channel); }
 .tools-row.live .tools-sum { color: var(--channel); }
 .tools-row .calls { margin: 0 0 4px 18px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--rule-soft); border-radius: var(--r); }
@@ -703,6 +704,7 @@ pre.code code { background: none; padding: 0; }
   margin: 0; font: 12px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere;
   max-height: 320px; overflow-y: auto;
 }
+.calls.full li.thought .md { font-size: 13px; line-height: 1.55; color: var(--ink-2); font-style: italic; max-height: 320px; overflow-y: auto; }
 
 /* ------------------------------------------------ two places: Agents and System */
 .tabbar, .p-chat .tabbar { display: none !important; }
