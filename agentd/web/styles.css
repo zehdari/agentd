@@ -631,7 +631,7 @@ pre.code code { background: none; padding: 0; }
 }
 .send:hover { background: var(--primary-hover); }
 .send:disabled { opacity: .4; cursor: default; }
-.p-chat .hint { text-align: center; margin: 6px 0 14px; }
+@media (min-width: 721px) { .p-chat .composer { margin-bottom: 16px; } }   /* room below it at the end of the chat; pinned flush above that */
 
 @media (max-width: 1240px) {
   .details-open .chat-layout { grid-template-columns: minmax(0, 1fr); }
@@ -651,7 +651,6 @@ pre.code code { background: none; padding: 0; }
   .bubble, .reply { font-size: 16px; }
   .p-chat .composer { bottom: calc(6px + env(safe-area-inset-bottom)); }
   .p-chat .composer textarea { font-size: 16px; }
-  .p-chat .hint { display: none; }
   .tools-sum { white-space: normal; }
 }
 .tools-toggle { flex-wrap: wrap; row-gap: 2px; }

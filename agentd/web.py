@@ -1037,6 +1037,28 @@ def make_app(bot) -> web.Application:
             await bot.feed_for(thread).send(stopping_text(dropped) + " (from the dashboard)")
         return web.json_response({"ok": True, "stopped": stopped})
 
+    async def delete(request):
+        agent = agent_or_404(request)
+        tid = agent.thread_id
+        if dash.status(agent) == "running":
+            return web.json_response({"error": "It's still running. Stop it first."}, status=409)
+        bot.stop_agent(tid)   # drops anything still queued for it
+        del bot.state.agents[tid]
+        bot.state.save()
+        dash.logs.pop(tid, None)
+        for path in (config.STATE_DIR / "logs" / f"{tid}.jsonl", SENT_DIR / f"{tid}.jsonl"):
+            path.unlink(missing_ok=True)
+        shutil.rmtree(INBOX / str(tid), ignore_errors=True)
+        if agent.discord:   # archived, not deleted: messages there no longer reach an agent
+            import discord
+            try:
+                thread = await bot.get_thread(tid)
+                await thread.send("-# 🗑️ Deleted from the dashboard. Messages here no longer reach an agent.")
+                await thread.edit(archived=True)
+            except discord.HTTPException:
+                log.warning("dashboard: couldn't archive thread %s", tid, exc_info=True)
+        return web.json_response({"ok": True})
+
     async def effort(request):
         agent = agent_or_404(request)
         level = (await body(request)).get("level")
@@ -1085,7 +1107,8 @@ def make_app(bot) -> web.Application:
         web.get("/api/file", file), web.get("/api/pdf/pages", pdf_pages), web.get("/api/pdf/page", pdf_png),
         web.get("/api/models", model_catalog),
         web.post("/api/agents", new_agent), web.post("/api/agents/{id}/message", message),
-        web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/effort", effort),
+        web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/delete", delete),
+        web.post("/api/agents/{id}/effort", effort),
         web.post("/api/agents/{id}/seen", seen), web.post("/api/jobs/{unit}/stop", stop_job),
         web.post("/api/usage/refresh", refresh_usage), web.post("/api/settings", settings),
         web.static("/static", STATIC),

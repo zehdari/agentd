@@ -164,6 +164,7 @@ const ICONS = {
   system: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   send: '<path d="M5 12h13M13 6l6 6-6 6"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M16 8V4H4v12h4"/>',
   chev: '<path d="m9 6 6 6-6 6"/>',
@@ -806,7 +807,10 @@ function detailsHtml(d) {
         ${mix ? `<dt>Tools</dt><dd>${mix}</dd>` : ""}
       </dl>
       <div class="d-actions">${effortSel}
-        ${d.url ? `<a class="btn" href="${esc(d.url)}" target="_blank" rel="noopener">${icon("ext")}<span>Discord thread</span></a>` : ""}</div>
+        ${d.url ? `<a class="btn" href="${esc(d.url)}" target="_blank" rel="noopener">${icon("ext")}<span>Discord thread</span></a>` : ""}
+        ${d.status === "running" ? "" : ui.confirm === `delete:${d.id}`
+          ? `<button class="btn danger" type="button" data-delete="${d.id}">${icon("trash")}<span>Delete for good?</span></button>`
+          : `<button class="btn danger" type="button" data-arm="delete:${d.id}">${icon("trash")}<span>Delete chat</span></button>`}</div>
     </section>
     <section aria-labelledby="dt-h"><h2 id="dt-h">Last 2 hours</h2>
       ${d.segs.length ? `<div class="d-track">${axis(d.now, d.window)}${track(d, d.now, d.window, { w: 320, h: 36, big: true })}</div>
@@ -1100,6 +1104,16 @@ function arm(key) {
   rerender();
 }
 
+async function deleteAgent(id, btn) {
+  btn.disabled = true;
+  try { await api(`/api/agents/${id}/delete`, {}); } catch (err) { btn.disabled = false; alert(err.message); return; }
+  delete cache.agents[id];
+  if (cache.overview) cache.overview.agents = cache.overview.agents.filter(a => String(a.id) !== String(id));
+  try { localStorage.removeItem(draftKey(id)); } catch { /* private mode */ }
+  ui.details = false;
+  navigate("/");
+}
+
 async function act(fn, btn) {
   if (btn) btn.disabled = true;
   try { await fn(); } catch (err) { alert(err.message); }
@@ -1129,6 +1143,7 @@ document.addEventListener("click", e => {
     rerender();
   } else if (t.dataset.arm) arm(t.dataset.arm);
   else if (t.dataset.stop) act(() => api(`/api/agents/${t.dataset.stop}/stop`, {}), t);
+  else if (t.dataset.delete) deleteAgent(t.dataset.delete, t);
   else if (t.dataset.stopjob) act(() => api(`/api/jobs/${encodeURIComponent(t.dataset.stopjob)}/stop`, {}), t);
   else if (t.dataset.seen) act(() => api(`/api/agents/${t.dataset.seen}/seen`, {}), t);
   else if (t.dataset.filter) { ui.filter = t.dataset.filter; ui.showAll = false; rerender(); }
