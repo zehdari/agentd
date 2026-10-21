@@ -497,8 +497,7 @@ class Dashboard:
         """When the current (or last) run began. A run just started from a new message hasn't
         logged anything yet, so the log's last segment is still the previous turn's."""
         t = al.segs[-1][0] if al.segs else agent.created
-        run = self.bot.runs.get(agent.thread_id) if live else None
-        return max(t, run.started) if run else t
+        return max(t, self.bot.run_started.get(agent.thread_id, 0)) if live else t
 
     def agent_summary(self, agent, now: float) -> dict:
         al = self.log_for(agent)

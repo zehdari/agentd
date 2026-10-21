@@ -72,6 +72,7 @@ class AgentBot(discord.Client):
         self.state = State(config.STATE_DIR / "state.json")
         self.runs: dict[int, Run] = {}
         self.active: set[int] = set()  # threads with a run loop in progress
+        self.run_started: dict[int, float] = {}  # when each thread's current run began
         self.queued: dict[int, list[tuple[str, discord.Message | None]]] = {}
         self.feeds: dict[int, Feed] = {}
         self.stop_buttons: dict[int, int] = {}  # trigger message id -> thread id, while that run is going
@@ -254,6 +255,7 @@ class AgentBot(discord.Client):
             await react(trigger, "📥")
             return
         self.active.add(agent.thread_id)
+        self.run_started[agent.thread_id] = time.time()
         asyncio.create_task(self.run_loop(agent, thread, text, trigger))
 
     async def save_attachments(self, agent: Agent, attachments) -> list[str]:
@@ -281,6 +283,7 @@ class AgentBot(discord.Client):
                 trigger = pending[-1][1]
                 for _, t in pending:
                     await react(t, "📥", remove=True)
+                self.run_started[agent.thread_id] = time.time()
         finally:
             self.active.discard(agent.thread_id)
 
