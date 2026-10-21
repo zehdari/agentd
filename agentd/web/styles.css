@@ -600,6 +600,25 @@ pre.code code { background: none; padding: 0; }
 .bubble .md p { max-width: none; }
 .bubble .md code { background: rgba(127, 160, 190, .18); }
 .bubble-note { margin: 0; color: var(--ink-3); font-size: 12px; font-style: italic; }
+.bubble-meta { display: flex; align-items: center; gap: 10px; }
+.bubble-edit {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; margin-right: -6px; border: 0; border-radius: var(--r);
+  background: none; color: var(--ink-3); font: inherit; font-size: 12px; cursor: pointer;
+}
+.bubble-edit:hover, .bubble-edit:focus-visible { background: var(--hover); color: var(--ink-2); }
+/* with a mouse it shows when you point at the message; on a phone it's always there */
+@media (any-hover: hover) {
+  .bubble-row .bubble-edit { opacity: 0; transition: opacity .15s var(--ease); }
+  .bubble-row:hover .bubble-edit, .bubble-edit:focus-visible { opacity: 1; }
+}
+.edit-form { align-self: stretch; }
+.edit-form textarea {
+  width: min(100%, 560px); min-height: 64px; max-height: 320px; padding: 10px 14px; resize: none;
+  border: 1px solid var(--channel); border-radius: 18px 18px 4px 18px; outline: 0; box-shadow: 0 0 0 3px var(--channel-a);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 15px; line-height: 1.5;
+}
+.edit-actions { display: flex; gap: 8px; }
+@media (max-width: 720px) { .edit-form textarea { font-size: 16px; } }
 .reply { font-size: 15px; line-height: 1.62; max-width: 70ch; }
 .reply.md p { margin-bottom: 10px; max-width: none; }
 .reply.md ul, .reply.md ol { max-width: none; }

@@ -209,10 +209,11 @@ class AgentBot(discord.Client):
     # ---- agents ----------------------------------------------------------
 
     async def start_agent(self, text: str, cwd: Path, model: str | None, effort: str | None = None, *,
-                          origin: discord.Message | None = None, attachments=(), discord_thread: bool = True) -> Agent:
+                          origin: discord.Message | None = None, attachments=(), discord_thread: bool = True,
+                          title: str | None = None, setup=None) -> Agent:
         """Start an agent in a new #agents thread, or with no Discord presence at all
-        (discord_thread=False, for the dashboard)."""
-        title = short(text, 90) or "agent"
+        (discord_thread=False, for the dashboard). `setup(agent)` runs before its first run starts."""
+        title = title or short(text, 90) or "agent"
         if not discord_thread:
             thread = trigger = None
         elif origin is not None:
@@ -227,6 +228,8 @@ class AgentBot(discord.Client):
         tid = thread.id if thread is not None else self.state.local_id()
         agent = Agent(thread_id=tid, cwd=str(cwd), title=title, model=model, effort=effort,
                       discord=thread is not None)
+        if setup:
+            setup(agent)
         self.state.agents[tid] = agent
         self.state.save()
         await self.feed_for(thread).send(

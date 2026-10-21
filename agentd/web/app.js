@@ -45,6 +45,7 @@ const ui = {
   attach: [],               // files waiting to go with the next reply
   newFiles: [],             // files for the new-agent form
   details: false,           // the agent page's side panel
+  editing: null,            // a message of yours being edited into a new chat: {key, text}
   data: null,
 };
 
@@ -162,6 +163,7 @@ function fileTiles(paths, exists) {
 }
 
 const ICONS = {
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>',
   clip: '<path d="m20 11.5-7.8 7.8a5 5 0 0 1-7.1-7.1l8-8a3.3 3.3 0 0 1 4.7 4.7l-7.9 7.9a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3"/>',
   agents: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
   jobs: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
@@ -739,6 +741,9 @@ function chatTime(t) {
   return isToday(t) ? `Today ${hm(t)}` : `${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}, ${hm(t)}`;
 }
 
+// Which of your messages can be edited into a new chat: any in a Claude chat, the first in a ChatGPT one.
+const editKey = e => e.uuid || (e.first ? "first" : "");
+
 function convoHtml(d) {
   const out = [];
   const entries = d.entries;
@@ -773,9 +778,22 @@ function convoHtml(d) {
       </div>`);
     } else if (e.kind === "you") {
       stamp(e.t);
-      out.push(`<div class="bubble-row">${e.paths ? `<div class="thumbs mine">${fileTiles(e.paths, e.exists)}</div>` : ""}
+      const key = editKey(e), editing = key && ui.editing && ui.editing.key === key;
+      const files = e.paths ? `<div class="thumbs mine">${fileTiles(e.paths, e.exists)}</div>` : "";
+      if (editing) {
+        out.push(`<form class="bubble-row edit-form" id="edit-form">${files}
+          <label class="sr" for="edit-text">Edit your message</label>
+          <textarea id="edit-text" rows="2">${esc(ui.editing.text)}</textarea>
+          <p class="bubble-note">Starts a new chat from here${e.paths ? " with the same files" : ""}. This one stays as it is.</p>
+          <div class="edit-actions"><button class="btn sm" type="button" data-edit-cancel>Cancel</button>
+            <button class="btn sm primary" type="submit">Start new chat</button></div></form>`);
+        continue;
+      }
+      const note = e.steer ? `<p class="bubble-note">sent while it was working</p>` : "";
+      const edit = key ? `<button class="bubble-edit" type="button" data-edit="${esc(key)}" title="Edit into a new chat">${icon("edit", "i i-sm")}<span>Edit</span></button>` : "";
+      out.push(`<div class="bubble-row">${files}
         ${e.text ? `<div class="bubble"><div class="md">${md(e.text)}</div></div>` : ""}
-        ${e.steer ? `<p class="bubble-note">sent while it was working</p>` : ""}</div>`);
+        ${note || edit ? `<div class="bubble-meta">${note}${edit}</div>` : ""}</div>`);
     } else if (e.kind === "claude") {
       stamp(e.t);
       out.push(`<div class="reply md">${md(e.text)}</div>`);
@@ -820,6 +838,7 @@ function detailsHtml(d) {
         <dt>Directory</dt><dd><code>${esc(d.cwd)}</code></dd>
         <dt>Model</dt><dd>${esc(d.model_label || d.model || "default")}</dd>
         <dt>Started</dt><dd>${esc(when(d.created))}</dd>
+        ${d.parent ? `<dt>Edited from</dt><dd><a href="/agents/${esc(d.parent.id)}">${esc(d.parent.title)}</a></dd>` : ""}
         <dt>Turns</dt><dd>${d.turns} · ${d.tool_count} tool calls</dd>
         ${mix ? `<dt>Tools</dt><dd>${mix}</dd>` : ""}
       </dl>
@@ -884,7 +903,7 @@ function renderDetail(d) {
 
   const outKey = (d.outbox || []).map(m => m.state).join(",") + "|" + ui.sending.map(s => Math.floor(s.pct * 100)).join(",");
   const key = `${d.entries_from}:${ui.loadingOlder}:${d.total_entries}:${d.status}:${d.queued}:${outKey}:${[...ui.expanded].join(",")}:${d.started}`;
-  if (key !== ui.convoKey) {
+  if (key !== ui.convoKey && !(ui.editing && $("#edit-text"))) {   // don't redraw under a message being edited
     const sc = scroller(), nearBottom = sc.clientHeight + sc.scrollTop > sc.scrollHeight - 240;
     ui.convoKey = key;
     $(".convo").innerHTML = convoHtml(d);
@@ -1058,6 +1077,7 @@ function navigate(url, push = true) {
   ui.firstDetail = true;
   ui.convoKey = "";
   ui.confirm = null;
+  ui.editing = null;
   ui.scrolledToHash = false;
   ui.newOpen = false;
   renderNewAgent();
@@ -1140,6 +1160,25 @@ async function deleteAgent(id, btn) {
   if (AGENT_ID) { ui.details = false; navigate("/"); } else { ui.confirm = null; rerender(); refresh(); }
 }
 
+function startEdit(key) {
+  const e = ui.data && ui.data.entries.find(x => x.kind === "you" && editKey(x) === key);
+  if (!e) return;
+  ui.editing = { key, text: e.text };
+  ui.convoKey = "";
+  rerender();
+  const ta = $("#edit-text");
+  if (!ta) return;
+  fitComposer(ta);
+  ta.focus({ preventScroll: true });
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.closest(".edit-form").scrollIntoView({ block: "nearest" });
+}
+function stopEdit() {
+  ui.editing = null;
+  ui.convoKey = "";
+  rerender();
+}
+
 async function act(fn, btn) {
   if (btn) btn.disabled = true;
   try { await fn(); } catch (err) { alert(err.message); }
@@ -1175,6 +1214,8 @@ document.addEventListener("click", e => {
   else if (t.dataset.filter) { ui.filter = t.dataset.filter; ui.showAll = false; rerender(); }
   else if (t.hasAttribute("data-showall")) { ui.showAll = true; rerender(); }
   else if (t.hasAttribute("data-older")) loadOlder();
+  else if (t.dataset.edit) startEdit(t.dataset.edit);
+  else if (t.hasAttribute("data-edit-cancel")) stopEdit();
   else if (t.dataset.expand) {
     const k = +t.dataset.expand;
     ui.expanded.has(k) ? ui.expanded.delete(k) : ui.expanded.add(k);
@@ -1257,6 +1298,20 @@ document.addEventListener("submit", async e => {
     btn.disabled = false;
     ui.convoKey = "";
     refresh();
+  } else if (e.target.id === "edit-form") {
+    const btn = $("button[type=submit]", e.target), { key } = ui.editing;
+    const text = $("#edit-text").value.trim();
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Starting…";
+    try {
+      const r = await api(`/api/agents/${AGENT_ID}/edit`, { text, ...(key === "first" ? {} : { uuid: key }) });
+      navigate(`/agents/${r.id}`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Start new chat";
+      alert(`Couldn’t start the new chat: ${err.message}`);
+    }
   } else if (e.target.id === "new-form") {
     const fields = Object.fromEntries(new FormData(e.target)), err = $("#new-error");
     const btn = $("button[type=submit]", e.target), label = $("span", btn);
@@ -1282,7 +1337,9 @@ document.addEventListener("keydown", e => {
   // With a physical keyboard Enter sends and Shift+Enter makes a new line; on a phone Enter is a new
   // line and you tap Send. Any fine pointer or hover means a mouse/trackpad, so likely a keyboard too.
   // Same for the reply box and the new agent task; Ctrl/Cmd+Enter always sends.
-  const form = e.target.id === "m" ? $("#composer") : e.target.name === "text" && e.target.closest("#new-form");
+  if (e.target.id === "edit-text" && e.key === "Escape") { stopEdit(); return; }
+  const form = e.target.id === "m" ? $("#composer") : e.target.id === "edit-text" ? $("#edit-form")
+    : e.target.name === "text" && e.target.closest("#new-form");
   if (!form || e.key !== "Enter" || e.shiftKey || e.isComposing) return;
   if (e.ctrlKey || e.metaKey || matchMedia("(any-hover: hover), (any-pointer: fine)").matches) {
     e.preventDefault();
@@ -1291,6 +1348,7 @@ document.addEventListener("keydown", e => {
 });
 document.addEventListener("input", e => {
   if (e.target.id === "m") { fitComposer(e.target); if (AGENT_ID) saveDraft(AGENT_ID, e.target.value); }
+  if (e.target.id === "edit-text" && ui.editing) { ui.editing.text = e.target.value; fitComposer(e.target); }
 });
 
 // Paste screenshots straight into the reply box or the task; drop files on the chat or the form.

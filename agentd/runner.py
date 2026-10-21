@@ -45,6 +45,8 @@ class Run:
         ]
         if self.agent.session_id:
             args += ["--resume", self.agent.session_id]
+        elif self.agent.fork_from:   # an edited message: a copy of that conversation up to just before it
+            args += ["--resume", self.agent.fork_from, "--fork-session", "--resume-session-at", self.agent.fork_at]
         else:
             args += ["--name", self.agent.title[:60]]
         if self.agent.model:

@@ -21,7 +21,7 @@ from pathlib import Path
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from . import config, models
-from .format import short, split_attached
+from .format import ATTACHED, short, split_attached
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +34,9 @@ UNIT_NAME = re.compile(r"^[\w@.:-]+$")
 INBOX = config.STATE_DIR / "inbox"     # files you attach, from Discord or here
 MAX_UPLOAD = int(os.environ.get("AGENTD_WEB_MAX_UPLOAD_MB", "2048")) * 1024 * 1024   # per message
 SENT_DIR = config.STATE_DIR / "sent"   # <thread>.jsonl: what agentd-send actually delivered
+LOGS = config.STATE_DIR / "logs"       # <thread>.jsonl: each agent's raw stream-json
+CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"   # Claude Code's own session transcripts
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PDF_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agentd" / "pdf"
 PDF_WIDTH = 1400                       # px; phones zoom in from here
 PDF_MAX_PAGES = 300
@@ -335,8 +338,12 @@ class AgentLog:
             t = self._at(parse_ts(ev.get("timestamp")))
             text, paths = split_attached(text_of(ev.get("message", {}).get("content")).strip())
             if text or paths:
+                # uuid: Claude Code's id for the message, so it can be edited into a new chat.
+                # first: the chat's opening message, which can be edited for Codex agents too.
+                first = not any(e["kind"] == "you" for e in self.entries)
                 self.entries.append({"kind": "you", "t": t, "text": text, "steer": in_run,
-                                     **({"paths": paths} if paths else {})})
+                                     **({"paths": paths} if paths else {}),
+                                     **({"uuid": ev["uuid"]} if ev.get("uuid") else {}), **({"first": True} if first else {})})
                 if in_run and t:
                     self.steers.append(t)
             return
@@ -387,6 +394,59 @@ class AgentLog:
             if self.segs:
                 self.segs[-1][2] = False
             self._new_run = True
+
+
+# ---------------------------------------------------------------- editing a message into a new chat
+
+def transcript_parent(session_id: str, uuid: str) -> tuple[bool, str | None]:
+    """(found, the message before it) for message `uuid` in a Claude Code session transcript.
+    A conversation's first message has no message before it. One sent mid-run is filed as a
+    queued_command attachment that points back to it."""
+    for path in glob.glob(str(CLAUDE_PROJECTS / "*" / f"{glob.escape(session_id)}.jsonl")):
+        with open(path, "rb") as f:
+            for raw in f:
+                if uuid.encode() not in raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except ValueError:
+                    continue
+                if ev.get("uuid") == uuid or (ev.get("attachment") or {}).get("source_uuid") == uuid:
+                    return True, ev.get("parentUuid")
+    return False, None
+
+
+def log_cut(thread_id: int, uuid: str) -> int | None:
+    """Where message `uuid` starts in an agent's log, in bytes: everything before it is the history it follows."""
+    offset = 0
+    try:
+        with open(LOGS / f"{thread_id}.jsonl", "rb") as f:
+            for raw in f:
+                if uuid.encode() in raw:
+                    try:
+                        ev = json.loads(raw)
+                    except ValueError:
+                        ev = {}
+                    if ev.get("type") == "user" and ev.get("uuid") == uuid:
+                        return offset
+                offset += len(raw)
+    except OSError:
+        pass
+    return None
+
+
+def copy_history(src: int, dst: int, cut: int, before: float) -> None:
+    """Give a chat edited off another one the conversation so far: the log up to `cut` and the files sent before `before`."""
+    LOGS.mkdir(parents=True, exist_ok=True)
+    with open(LOGS / f"{src}.jsonl", "rb") as f:
+        (LOGS / f"{dst}.jsonl").write_bytes(f.read(cut))
+    try:
+        sent = [raw for raw in (SENT_DIR / f"{src}.jsonl").read_bytes().splitlines(keepends=True)
+                if json.loads(raw).get("t", 0) < before]
+    except (OSError, ValueError):
+        sent = []
+    if sent:
+        (SENT_DIR / f"{dst}.jsonl").write_bytes(b"".join(sent))
 
 
 # ---------------------------------------------------------------- machine
@@ -762,6 +822,8 @@ class Dashboard:
             "jobs": jobs, "file_list": files, "efforts": models.efforts_for(agent.model),
             # the title is cut to 90 characters; the Details panel shows the whole first message
             "prompt": short(next((e["text"] for e in al.entries if e["kind"] == "you" and e["text"]), agent.title), 1000),
+            "parent": ({"id": str(agent.parent), "title": parent.title}
+                       if (parent := self.bot.state.agents.get(agent.parent or 0)) else None),
             "outbox": [{"t": m["t"], "text": split_attached(m["text"])[0], "state": m["state"],
                         "files": [inbox_name(p) for p in split_attached(m["text"])[1]]}
                        for m in outbox],
@@ -1015,6 +1077,55 @@ def make_app(bot) -> web.Application:
         finally:
             discard(uploads)
 
+    async def edit(request):
+        """Edit one of your messages into a new chat: the conversation up to just before it, then the new text.
+        The original chat is left as it is."""
+        from .bot import resolve_dir
+        agent = agent_or_404(request)
+        data = await body(request)
+        text, uuid = str(data.get("text", "")).strip(), str(data.get("uuid") or "")
+        if uuid and not UUID.match(uuid):
+            return web.json_response({"error": "bad message id"}, status=400)
+        mine = [e for e in dash.log_for(agent).entries if e["kind"] == "you"]
+        entry = next((e for e in mine if e.get("uuid") == uuid), None) if uuid else (mine[0] if mine else None)
+        if entry is None:
+            return web.json_response({"error": "That message isn't in this chat."}, status=404)
+        paths = [p for p in entry.get("paths", []) if Path(p).is_file()]   # its files go along
+        if not text and not paths:
+            return web.json_response({"error": "Write a message."}, status=400)
+        cwd = resolve_dir(agent.cwd)
+        if cwd is None:
+            return web.json_response({"error": f"Its directory is gone: {agent.cwd}"}, status=409)
+        mirror = bool(bot.state.settings.get("web_to_discord"))
+        if mirror and bot.ch_agents is None:
+            return web.json_response({"error": "agentd isn't connected to Discord yet."}, status=503)
+        at = cut = None
+        if uuid and not models.is_codex(agent.model):
+            found, at = (await asyncio.to_thread(transcript_parent, agent.session_id, uuid)
+                         if agent.session_id else (False, None))
+            if not found:
+                return web.json_response({"error": "Couldn't find that message in Claude Code's session."}, status=409)
+            if at:   # not the opening message, so there's history to keep
+                cut = await asyncio.to_thread(log_cut, agent.thread_id, uuid)
+                if cut is None:
+                    return web.json_response({"error": "Couldn't find that message in the chat's log."}, status=409)
+        elif entry is not mine[0]:
+            return web.json_response({"error": "Only a ChatGPT chat's first message can be edited."}, status=400)
+
+        def setup(new):
+            new.parent = agent.thread_id
+            if at:
+                new.fork_from, new.fork_at = agent.session_id, at
+                copy_history(agent.thread_id, new.thread_id, cut, entry["t"] or time.time())
+
+        prompt = text or "Look at the attached files."
+        if paths:
+            prompt += f"\n\n{ATTACHED}{', '.join(paths)}]"
+        title = f"{short(agent.title.removesuffix(' (edited)'), 80)} (edited)" if at else short(prompt, 90)
+        new = await bot.start_agent(prompt, cwd, agent.model, agent.effort, discord_thread=mirror,
+                                    title=title, setup=setup)
+        return web.json_response({"id": str(new.thread_id)})
+
     async def post_to_discord(thread, text: str, uploads: list[Upload]):
         """Mirror a dashboard message into the agent's thread, with the files that fit under Discord's cap."""
         import discord
@@ -1115,6 +1226,7 @@ def make_app(bot) -> web.Application:
         web.get("/api/file", file), web.get("/api/pdf/pages", pdf_pages), web.get("/api/pdf/page", pdf_png),
         web.get("/api/models", model_catalog),
         web.post("/api/agents", new_agent), web.post("/api/agents/{id}/message", message),
+        web.post("/api/agents/{id}/edit", edit),
         web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/delete", delete),
         web.post("/api/agents/{id}/effort", effort),
         web.post("/api/agents/{id}/seen", seen), web.post("/api/jobs/{unit}/stop", stop_job),
