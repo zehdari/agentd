@@ -24,6 +24,7 @@ class Run:
         self.prompt = prompt
         self.proc: asyncio.subprocess.Process | None = None
         self.stopped = False
+        self.started = time.time()
         self.stderr: deque[str] = deque(maxlen=40)
         # Tags of messages written to stdin that the agent hasn't read yet, oldest first. The bot
         # pops one per replayed user message and closes stdin once a turn ends with none left.

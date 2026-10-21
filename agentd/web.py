@@ -493,6 +493,13 @@ class Dashboard:
             return "waiting"
         return {"error": "failed", "interrupted": "interrupted"}.get(agent.status, "done")
 
+    def started(self, agent, al, live: bool) -> float:
+        """When the current (or last) run began. A run just started from a new message hasn't
+        logged anything yet, so the log's last segment is still the previous turn's."""
+        t = al.segs[-1][0] if al.segs else agent.created
+        run = self.bot.runs.get(agent.thread_id) if live else None
+        return max(t, run.started) if run else t
+
     def agent_summary(self, agent, now: float) -> dict:
         al = self.log_for(agent)
         status = self.status(agent)
@@ -507,7 +514,7 @@ class Dashboard:
             "provider": "codex" if models.is_codex(agent.model) else "claude", "default_effort": models.default_effort(agent.model),
             "effort": agent.effort, "status": status, "raw_status": agent.status, "turns": agent.turns,
             "created": agent.created, "updated": agent.updated,
-            "started": al.segs[-1][0] if al.segs else agent.created,
+            "started": self.started(agent, al, live),
             "ticks": [t for t, _ in al.ticks if t >= lo], "steers": [t for t in al.steers if t >= lo], "segs": segs,
             "tool_count": sum(al.tools.values()), "now_doing": al.last_tool if status == "running" else "",
             "reply": short(reply[1], 320) if reply else "", "reply_t": reply[0] if reply else None,

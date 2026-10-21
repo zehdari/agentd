@@ -799,7 +799,7 @@ function convoHtml(d) {
       <p class="bubble-note">${note}</p></div>`);
   }
   if (d.status === "running") {
-    out.push(`<p class="working"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working · ${dur(d.now - d.started)}${d.queued ? ` · ${d.queued} message${d.queued > 1 ? "s" : ""} queued` : ""}</p>`);
+    out.push(`<p class="working"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working · <span class="work-t" data-start="${d.started}">${dur(d.now - d.started)}</span>${d.queued ? ` · ${d.queued} message${d.queued > 1 ? "s" : ""} queued` : ""}</p>`);
   }
   if (d.entries_from > 0) {
     out.unshift(`<button class="convo-more" type="button" data-older${ui.loadingOlder ? " disabled" : ""}>${ui.loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}</button>`);
@@ -883,17 +883,26 @@ function renderDetail(d) {
   document.body.classList.toggle("details-open", ui.details);
 
   const outKey = (d.outbox || []).map(m => m.state).join(",") + "|" + ui.sending.map(s => Math.floor(s.pct * 100)).join(",");
-  const key = `${d.entries_from}:${ui.loadingOlder}:${d.total_entries}:${d.status}:${d.queued}:${outKey}:${[...ui.expanded].join(",")}:${Math.floor(d.now / 60)}`;
+  const key = `${d.entries_from}:${ui.loadingOlder}:${d.total_entries}:${d.status}:${d.queued}:${outKey}:${[...ui.expanded].join(",")}:${d.started}`;
   if (key !== ui.convoKey) {
     const sc = scroller(), nearBottom = sc.clientHeight + sc.scrollTop > sc.scrollHeight - 240;
     ui.convoKey = key;
     $(".convo").innerHTML = convoHtml(d);
     if (ui.firstDetail ? location.hash !== "#top" : nearBottom) toBottom();
   }
+  ui.skew = d.now - Date.now() / 1000;
+  tickWorking();
   if (ui.firstDetail && location.hash === "#reply") $("#m").focus();
   ui.firstDetail = false;
   $("#details").innerHTML = detailsHtml(d);
 }
+
+// The "Working · 12 s" timer counts on its own between polls, on the server's clock.
+function tickWorking() {
+  const el = $(".work-t");
+  if (el) el.textContent = dur(Date.now() / 1000 + (ui.skew || 0) - Number(el.dataset.start));
+}
+setInterval(tickWorking, 1000);
 
 // ------------------------------------------------------------------ loop
 
