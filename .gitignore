@@ -9,3 +9,4 @@ agentd.failed/
 .codex-login-loop.sh
 # design mockups and screenshots (large)
 mockups/
+tts/.venv/

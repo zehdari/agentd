@@ -60,6 +60,14 @@ fi
 uv pip install -q --python "$AGENTS/.venv/bin/python" -r "$AGENTS/requirements.txt"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$AGENTS/bin/agentd-send" "$HOME/.local/bin/agentd-send"
+ln -sf "$AGENTS/bin/agentd-say" "$HOME/.local/bin/agentd-say"
+
+step "Text-to-speech for agentd-say (Kokoro)"
+if [ ! -x "$AGENTS/tts/.venv/bin/python" ]; then
+  uv venv -q --python 3.12 "$AGENTS/tts/.venv"
+fi
+command -v espeak-ng >/dev/null || sudo apt-get install -y -qq espeak-ng
+uv pip install -q --python "$AGENTS/tts/.venv/bin/python" --torch-backend=cu128 -r "$AGENTS/tts/requirements.txt"
 
 step "Claude Code settings: activity hooks + no bypass-mode warning dialog"
 python3 - "$AGENTS/hooks/relay.sh" <<'EOF'
@@ -82,8 +90,9 @@ EOF
 
 step "Services"
 mkdir -p "$HOME/.config/systemd/user"
-cp "$AGENTS/systemd/agentd.service" "$AGENTS/systemd/claude-rc.service" "$HOME/.config/systemd/user/"
+cp "$AGENTS/systemd/agentd.service" "$AGENTS/systemd/claude-rc.service" "$AGENTS/systemd/agentd-tts.service" "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
+systemctl --user enable --now agentd-tts.service
 systemctl --user enable --now claude-rc.service
 systemctl --user enable agentd.service
 if grep -q '^DISCORD_TOKEN=.\+' "$AGENTS/.env" 2>/dev/null; then

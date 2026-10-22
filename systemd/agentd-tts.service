@@ -1,0 +1,14 @@
+[Unit]
+Description=agentd-tts: local text-to-speech for agent voice messages (Kokoro)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/agents/tts
+EnvironmentFile=-%h/agents/.env
+ExecStart=%h/agents/tts/.venv/bin/python server.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

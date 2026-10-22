@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Speak to the user: turn text into a voice message and send it like agentd-send does."""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("text", nargs="?", help="what to say (default: read stdin)")
+parser.add_argument("--voice", help="Kokoro voice, e.g. am_michael, bm_george, af_heart (default: AGENTD_VOICE)")
+parser.add_argument("--speed", type=float, help="speaking rate, 1.0 = normal (default: AGENTD_VOICE_SPEED)")
+parser.add_argument("-m", "--message", help="caption to post with it (default: the text itself)")
+parser.add_argument("--alert", action="store_true", help="also ping the user's phone")
+parser.add_argument("-o", "--output", help="just write the MP3 here; don't send it")
+args = parser.parse_args()
+text = (args.text if args.text is not None else sys.stdin.read()).strip()
+if not text:
+    parser.error("nothing to say")
+
+body = {"text": text, "voice": args.voice, "speed": args.speed}
+request = urllib.request.Request(
+    f"http://127.0.0.1:{os.environ.get('AGENTD_TTS_PORT', '8781')}/tts",
+    data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+try:
+    with urllib.request.urlopen(request, timeout=300) as response:
+        mp3 = response.read()
+except urllib.error.HTTPError as e:
+    sys.exit(json.loads(e.read() or b"{}").get("error", f"HTTP {e.code}"))
+except OSError as e:
+    sys.exit(f"agentd-tts is not reachable ({e}); check: systemctl --user status agentd-tts")
+
+if args.output:
+    with open(args.output, "wb") as f:
+        f.write(mp3)
+    sys.exit(0)
+
+folder = os.path.expanduser("~/.local/state/agentd/voice")
+os.makedirs(folder, exist_ok=True)
+path = os.path.join(folder, time.strftime("voice-%Y%m%d-%H%M%S.mp3"))
+with open(path, "wb") as f:
+    f.write(mp3)
+send = [os.path.join(os.path.dirname(os.path.realpath(__file__)), "agentd-send"), path,
+        "-m", text if args.message is None else args.message] + (["--alert"] if args.alert else [])
+sys.exit(subprocess.call(send))

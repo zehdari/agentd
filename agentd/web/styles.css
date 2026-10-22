@@ -900,3 +900,18 @@ body.pull-settle:not(.p-chat) .main > :not(.topbar) { transition: transform .35s
   .details-open .details { top: 0; }   /* sticks under the column's top padding, where it sat before */
   .d-side { top: 0; }
 }
+
+/* Voice messages (agentd-say): one page-wide player; these tiles show and steer it. */
+.voice { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 380px; padding: 7px 8px 7px 7px;
+  border: 1px solid var(--rule); border-radius: 999px; background: var(--surface); }
+.voice-play { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 50%;
+  border: 0; background: var(--primary); color: var(--primary-ink); cursor: pointer; transition: background-color .15s var(--ease); }
+.voice-play:hover { background: var(--primary-hover); }
+.voice-play .i { width: 16px; height: 16px; fill: currentColor; }
+.voice-play .i path { stroke-linejoin: round; }
+.voice-track { flex: 1; height: 24px; display: flex; align-items: center; cursor: pointer; position: relative; }
+.voice-track::before { content: ""; position: absolute; left: 0; right: 0; height: 3px; border-radius: 2px; background: var(--rule); }
+.voice-fill { position: relative; height: 3px; width: 0; border-radius: 2px; background: var(--channel); }
+.voice.active .voice-fill::after { content: ""; position: absolute; right: -5px; top: -3.5px; width: 10px; height: 10px; border-radius: 50%; background: var(--channel); }
+.voice-t { min-width: 34px; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.voice-dl { width: 28px; height: 28px; color: var(--ink-3); }

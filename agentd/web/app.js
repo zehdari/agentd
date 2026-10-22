@@ -82,8 +82,108 @@ function size(b) {
 }
 const fileUrl = p => `/api/file?path=${encodeURIComponent(p)}`;
 const IMG_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+const AUDIO_RE = /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac)$/i;
 // Attached files are kept as <time>-name in the agent's inbox; show the name they had.
 const baseName = p => p.split("/").pop().replace(/^\d{9,}(\.\d+)?-/, "");
+
+// ------------------------------------------------------------------ voice messages
+// One <audio> for the whole page: the conversation redraws as the agent works, which would cut off
+// a player living inside it. Tiles in the chat only show and steer this one.
+
+const player = new Audio();
+player.preload = "auto";
+const voiceLen = new Map();   // src -> duration, once known
+const voicePlayed = new Set();
+let voiceSince = null, voiceUnlocked = false;
+const voiceAuto = () => localStorage.getItem("agentd-voice-auto") !== "off";
+const SILENCE = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+
+function voiceTile(src, name) {
+  return `<div class="voice" data-src="${esc(src)}">
+    <button class="voice-play" type="button" data-voice="${esc(src)}" aria-label="Play ${esc(name)}">${icon("play")}</button>
+    <div class="voice-track" data-seek="${esc(src)}"><span class="voice-fill"></span></div>
+    <span class="voice-t">${voiceLen.has(src) ? clock(voiceLen.get(src)) : "voice"}</span>
+    <a class="icon-btn voice-dl" href="${esc(src)}" download="${esc(name)}" aria-label="Download">${icon("download")}</a></div>`;
+}
+
+const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const playerSrc = () => player.src ? new URL(player.src).pathname + new URL(player.src).search : "";
+
+function toggleVoice(src, from = null) {
+  voiceUnlocked = true;
+  if (playerSrc() === src && !player.ended) {
+    if (player.paused) player.play().catch(() => {}); else player.pause();
+    return;
+  }
+  player.src = src;
+  if (from != null) player.currentTime = from;
+  voicePlayed.add(src);
+  player.play().catch(() => {});
+}
+
+// Put the playing tile (if it is on screen) in step with the player.
+function syncVoice() {
+  const cur = playerSrc();
+  if (player.duration && isFinite(player.duration) && cur) voiceLen.set(cur, player.duration);
+  for (const el of document.querySelectorAll(".voice")) {
+    if (!voiceLen.has(el.dataset.src)) probeVoice(el.dataset.src);
+    const src = el.dataset.src, active = src === cur && (!player.paused || (player.currentTime > 0 && !player.ended));
+    const playing = active && !player.paused;
+    el.classList.toggle("active", active);
+    const btn = el.querySelector(".voice-play");
+    btn.innerHTML = icon(playing ? "pause" : "play");
+    btn.setAttribute("aria-label", playing ? "Pause" : "Play");
+    const len = voiceLen.get(src);
+    el.querySelector(".voice-fill").style.width = active && len ? `${Math.min(100, player.currentTime / len * 100)}%` : "0";
+    el.querySelector(".voice-t").textContent = active ? clock(player.currentTime) + (len ? ` / ${clock(len)}` : "") : len ? clock(len) : "voice";
+  }
+}
+for (const ev of ["play", "pause", "ended", "timeupdate", "loadedmetadata"]) player.addEventListener(ev, syncVoice);
+
+// Fetch just enough of a clip to learn its length, so tiles show it before anyone presses play.
+const voiceProbed = new Set();
+function probeVoice(src) {
+  if (voiceProbed.has(src)) return;
+  voiceProbed.add(src);
+  const a = new Audio();
+  a.preload = "metadata";
+  a.addEventListener("loadedmetadata", () => { if (isFinite(a.duration)) { voiceLen.set(src, a.duration); syncVoice(); } a.src = ""; }, { once: true });
+  a.src = src;
+}
+
+// Voice messages that arrive while the page is open play by themselves (Settings → Voice).
+// Anything sent before the page loaded doesn't.
+function autoplayNew(now, items) {
+  if (voiceSince === null) { voiceSince = now; return; }
+  const fresh = items.filter(i => AUDIO_RE.test(i.p) && i.t > voiceSince && !voicePlayed.has(fileUrl(i.p)));
+  if (!fresh.length || !voiceAuto() || document.hidden) return;
+  fresh.sort((a, b) => a.t - b.t);
+  for (const i of fresh) voicePlayed.add(fileUrl(i.p));
+  if (!player.paused && !player.ended) return;   // don't talk over a message that is already playing
+  const last = fresh[fresh.length - 1];
+  player.src = fileUrl(last.p);
+  player.play().catch(() => {});
+}
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-voice]");
+  if (b) { toggleVoice(b.dataset.voice); return; }
+  const tr = e.target.closest("[data-seek]");
+  if (tr) {
+    const len = voiceLen.get(tr.dataset.seek), r = tr.getBoundingClientRect();
+    const at = len ? Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * len : 0;
+    if (playerSrc() === tr.dataset.seek) player.currentTime = at; else toggleVoice(tr.dataset.seek, at);
+  }
+});
+
+// iOS only lets a page start audio by itself if that element has played during a tap before.
+document.addEventListener("pointerdown", () => {
+  if (voiceUnlocked) return;
+  voiceUnlocked = true;
+  if (player.src) return;
+  player.src = SILENCE;
+  player.play().then(() => player.pause()).catch(() => {});
+}, { capture: true });
 
 async function api(path, body) {
   const opts = body === undefined ? {} : {
@@ -157,6 +257,7 @@ function fileTiles(paths, exists) {
     const img = IMG_RE.test(name);
     // Gone when this entry was loaded; tapping checks again, since the file may be there now.
     if (exists && !exists[k]) return `<a class="attach gone" href="${fileUrl(p)}" data-view="${img ? "image" : "file"}" data-recheck data-name="${esc(name)}">${icon(img ? "image" : "files", "i ft")}<span><b>${esc(name)}</b> deleted</span></a>`;
+    if (AUDIO_RE.test(name)) return voiceTile(fileUrl(p), name);
     return img ? `<a class="thumb" href="${fileUrl(p)}" data-view="image" data-name="${esc(name)}"><img src="${fileUrl(p)}" alt="${esc(name)}" loading="lazy"><span>${esc(name)}</span></a>`
       : `<a class="attach" href="${fileUrl(p)}" data-view="file" data-name="${esc(name)}">${icon("files", "i ft")}<span><b>${esc(name)}</b></span></a>`;
   }).join("");
@@ -184,6 +285,8 @@ const ICONS = {
   back: '<path d="m15 6-6 6 6 6"/>',
   reply: '<path d="M9 7 4 12l5 5"/><path d="M4 12h10a6 6 0 0 1 6 6"/>',
   term: '<path d="m5 8 4 4-4 4M12 16h7"/>',
+  play: '<path d="M8 5v14l11-7z"/>',
+  pause: '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="1"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v6H4V6h6"/>',
@@ -685,6 +788,16 @@ function discordSection() {
       Agents started from Discord keep their threads either way, and replies you send them from here show up there too.</p></section>`;
 }
 
+function voiceSection() {
+  const on = voiceAuto();
+  const opt = (v, label) => `<button type="button" data-voice-auto="${v}" aria-pressed="${on === v}">${label}</button>`;
+  return `<section aria-labelledby="vo-h"><h2 id="vo-h">Voice</h2>
+    <p class="set-label" id="vo-l">Play voice messages as they arrive</p>
+    <div class="segmented" role="group" aria-labelledby="vo-l">${opt(false, "Off")}${opt(true, "On")}</div>
+    <p class="set-note">Agents talk to you with <code>agentd-say</code>. With this on, a new voice message plays by itself while the dashboard is open on this device.
+      Phones only allow that after you tap the page once.</p></section>`;
+}
+
 function appearanceSection() {
   const cur = localStorage.getItem("agentd-theme") || "auto";
   const opt = (v, label) => `<button type="button" data-theme-set="${v}" aria-pressed="${cur === v}">${label}</button>`;
@@ -699,7 +812,7 @@ function renderSection(d) {
     jobs: () => jobsSection(d.jobs, d.now),
     files: () => filesSection(d.files),
     machine: () => machineSection(d.machine, d.now, d.window, { w: 900, h: 120 }),
-    settings: () => `<div class="settings">${discordSection()}${appearanceSection()}</div>`,
+    settings: () => `<div class="settings">${discordSection()}${voiceSection()}${appearanceSection()}</div>`,
   }[SECTION]();
   $("#view").innerHTML = `<div class="one-page page-${SECTION}">${body}</div>`;
 }
@@ -907,6 +1020,7 @@ function renderDetail(d) {
     const sc = scroller(), nearBottom = sc.clientHeight + sc.scrollTop > sc.scrollHeight - 240;
     ui.convoKey = key;
     $(".convo").innerHTML = convoHtml(d);
+    syncVoice();
     if (ui.firstDetail ? location.hash !== "#top" : nearBottom) toBottom();
   }
   ui.skew = d.now - Date.now() / 1000;
@@ -971,6 +1085,7 @@ async function refresh(manual = false) {
       if (o) cache.overview = o;
       const d = mergeDetail(cache.agents[id], raw);
       cache.agents[id] = d;
+      autoplayNew(d.now, raw.entries.filter(e => e.kind === "file").flatMap(e => e.paths.map(p => ({ p, t: e.t }))));
       if (mine !== seq) return;
       if (cache.overview) renderShell(cache.overview);
       ui.data = d;
@@ -980,6 +1095,7 @@ async function refresh(manual = false) {
     } else {
       const d = await api("/api/overview");
       cache.overview = d;
+      autoplayNew(d.now, (d.files || []).map(f => ({ p: f.path, t: f.t })));
       try { localStorage.setItem("agentd-overview", JSON.stringify(d)); } catch { /* full */ }
       if (mine !== seq) return;
       ui.data = d;
@@ -1237,6 +1353,9 @@ document.addEventListener("click", e => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     renderTheme();
     if (SYSTEM || SECTION) rerender();
+  } else if (t.dataset.voiceAuto) {
+    localStorage.setItem("agentd-voice-auto", t.dataset.voiceAuto === "true" ? "on" : "off");
+    rerender();
   } else if (t.dataset.webDiscord) {
     const on = t.dataset.webDiscord === "true";
     act(async () => {
@@ -1471,8 +1590,12 @@ document.addEventListener("click", e => {
       a.querySelector("span").innerHTML = `<b>${esc(a.dataset.name || "")}</b>`;
       openViewer(a.getAttribute("href"), a.dataset.name || "", a.dataset.view);
     }).catch(() => {});
+  } else if (a && AUDIO_RE.test(a.dataset.name || "")) {
+    e.preventDefault();
+    toggleVoice(a.getAttribute("href"));
   } else if (a) {
     e.preventDefault();
     openViewer(a.getAttribute("href"), a.dataset.name || "", a.dataset.view);
   } else if (e.target.closest("#viewer-close")) closeViewer();
 }, true);
+

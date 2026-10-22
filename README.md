@@ -40,6 +40,7 @@ Three ways in, all running on this machine:
 - **`/sh command:…`** runs a quick shell command without an agent.
 - `#alerts` is only for things with no agent thread: a terminal/Remote Control session that needs permission, or `agentd-send --alert` from a plain shell.
 - **Agents send you files** with `agentd-send plot.png -m "reward curve"`. Add `--alert` to ping you (in the agent's thread). It also works from any shell on the machine; without an agent thread it posts to `#alerts`.
+- **Agents talk to you** with `agentd-say "text"`: a voice message read by a local Kokoro voice (`agentd-tts` service, port 8781), with the text as its caption. Set `AGENTD_VOICE` (default `am_michael`) and `AGENTD_VOICE_SPEED` (default `0.85`) in `.env`, then `systemctl --user restart agentd-tts`. `agentd-say -o out.mp3 "…"` just writes the file.
 - **Long jobs** (training, Isaac Sim): agents are told to start them with `systemd-run --user …`, so they survive the agent's turn and agentd restarts.
 
 ## Web dashboard
@@ -51,6 +52,7 @@ agentd also serves a dashboard at **http://cam-pc:8780** (or `http://<tailscale 
 - **Agents:** each agent's state, current command and a timeline of the last 2 hours. Each tick is a tool call, and ▲ marks a message you sent mid-run. Stop agents from here (tap twice).
 - **Agent page:** the conversation with tool calls and the files it sent (images inline). Reply or steer from the message box (it is also posted in the Discord thread). Attach files with the paperclip, by pasting a screenshot, or by dropping them on the chat; the new-agent form takes files too. They land in the agent's inbox like Discord uploads, and ones under Discord's 10 MB cap are mirrored into the thread, change effort, copy the resume command.
 - **Edit a message into a new chat:** tap **Edit** under any message you sent (with a mouse, point at it), change it and tap **Start new chat**. The new chat picks up the conversation from just before that message, so the agent remembers everything up to there and nothing after. Files attached to the message go along. The original chat stays as it was, and the new one links back to it under Details → Edited from. In ChatGPT chats only the first message can be edited, which starts over.
+- **Voice messages** play in the chat (play/pause, tap the bar to seek). New ones play by themselves while the dashboard is open, after you've tapped the page once (phones require that). Turn this off under Settings → Voice.
 - **Machine, long jobs, files:** GPU/CPU/RAM over the last 2 hours, disk, `systemd-run` jobs agents started (with stop), and files sent with `agentd-send`.
 - **New agent:** starts an agent like posting in `#agents` does. By default it stays on the dashboard: no Discord thread and no Discord pings.
 - **Settings** (desktop rail; on the phone, at the bottom of System): **Discord → Post agents started here to Discord** gives new dashboard agents a thread in `#agents` like before. Off by default. Agents started from Discord keep their threads either way, and replies you send them from the dashboard also show up there.
@@ -80,4 +82,5 @@ State lives in `~/.local/state/agentd/`: `state.json`, raw stream logs per threa
 - `agentd/server.py`: localhost HTTP (`/hook`, `/send`, `/health`)
 - `agentd/web.py` + `agentd/web/`: the dashboard (JSON API and a plain HTML/CSS/JS front end)
 - `hooks/relay.sh`: global Claude Code hook that forwards events to agentd
-- `bin/agentd-send`, `bin/claude-rc-loop`, `systemd/*.service`, `setup/setup.sh`
+- `tts/server.py`: the `agentd-tts` text-to-speech service behind `bin/agentd-say`
+- `bin/agentd-send`, `bin/agentd-say`, `bin/claude-rc-loop`, `systemd/*.service`, `setup/setup.sh`
