@@ -6,6 +6,7 @@
 const touchDevice = () => matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
 function desktopUrl(which) {
   if (which === "linux") return "https://linux.zehdari.com/";   // KasmVNC's own web client (Caddy, tailnet only)
+  if (which === "windows") return "https://windows.zehdari.com/";   // Moonlight Web: Sunshine/NVENC over WebRTC
   const fit = which === "linux" && !touchDevice() ? "remote" : "scale";   // the VM's screen can't be resized from here
   return `/rd/novnc/vnc.html?autoconnect=1&reconnect=1&reconnect_delay=2000&show_dot=1&resize=${fit}&path=rd/ws/${which}`;
 }
