@@ -34,3 +34,6 @@ plugin actions appearance uint 0
 panel 1 "p=6;x=0;y=0" 0 34 22 1
 $Q -p /panels -n -a -t int -s 1
 setsid xfce4-panel >/dev/null 2>&1 &
+# Super (Cmd on a Mac through KasmVNC) opens the menu with its search box focused, like Ubuntu's Activities
+xfconf-query -c xfce4-panel -p /plugins/plugin-1/favorites -n -a -t string -s firefox.desktop -t string -s org.gnome.Nautilus.desktop -t string -s org.gnome.Terminal.desktop
+for k in Super_L Super_R; do xfconf-query -c xfce4-keyboard-shortcuts -p /commands/custom/$k -n -t string -s xfce4-popup-whiskermenu 2>/dev/null; done
