@@ -24,6 +24,7 @@ step "Packages: tmux, openssh-server, jq"
 APT=(sudo apt-get -o DPkg::Lock::Timeout=900)
 "${APT[@]}" update -qq
 "${APT[@]}" install -y -qq tmux openssh-server jq
+"${APT[@]}" install -y -qq --no-install-recommends tigervnc-standalone-server tigervnc-tools xfce4 xfce4-terminal dbus-x11 novnc   # remote desktop
 
 step "Never sleep or suspend"
 sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null
@@ -90,10 +91,11 @@ EOF
 
 step "Services"
 mkdir -p "$HOME/.config/systemd/user"
-cp "$AGENTS/systemd/agentd.service" "$AGENTS/systemd/claude-rc.service" "$AGENTS/systemd/agentd-tts.service" "$HOME/.config/systemd/user/"
+cp "$AGENTS/systemd/agentd.service" "$AGENTS/systemd/claude-rc.service" "$AGENTS/systemd/agentd-tts.service" "$AGENTS/systemd/agentd-desktop.service" "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
 systemctl --user enable --now agentd-tts.service
 systemctl --user enable --now claude-rc.service
+systemctl --user enable --now agentd-desktop.service
 systemctl --user enable agentd.service
 if grep -q '^DISCORD_TOKEN=.\+' "$AGENTS/.env" 2>/dev/null; then
   systemctl --user restart agentd.service

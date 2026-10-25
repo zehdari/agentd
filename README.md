@@ -55,6 +55,7 @@ agentd also serves a dashboard at **http://cam-pc:8780** (or `http://<tailscale 
 - **Voice messages** play in the chat (play/pause, tap the bar to seek). New ones play by themselves while the dashboard is open, after you've tapped the page once (phones require that). Turn this off under Settings → Voice.
 - **Machine, long jobs, files:** GPU/CPU/RAM over the last 2 hours, disk, `systemd-run` jobs agents started (with stop), and files sent with `agentd-send`.
 - **New agent:** starts an agent like posting in `#agents` does. By default it stays on the dashboard: no Discord thread and no Discord pings.
+- **Remote desktop** (Desktop in the rail; the screen icon at the top on the phone): opens a Linux desktop or the Windows VM in a new browser tab (noVNC). The Linux one is XFCE on its own virtual screen (`agentd-desktop` service, TigerVNC on `:5`), so it works while the GPU is passed to Windows. On a laptop it resizes to fit the browser window; on a phone it's scaled to fit, and the tab on the left edge has the keyboard. The VNC traffic goes through agentd, so the same Tailscale check guards it; the VNC servers themselves only listen on a private socket and localhost.
 - **Settings** (desktop rail; on the phone, at the bottom of System): **Discord → Post agents started here to Discord** gives new dashboard agents a thread in `#agents` like before. Off by default. Agents started from Discord keep their threads either way, and replies you send them from the dashboard also show up there.
 
 Only this machine and devices logged in to your own Tailscale account get in (checked with `tailscale whois` on every new device). Everyone else gets a 403. Set `AGENTD_WEB_PORT=0` in `.env` to turn it off. Theme follows your phone (light/dark); the toggle at the bottom of the side rail overrides it.
@@ -83,4 +84,5 @@ State lives in `~/.local/state/agentd/`: `state.json`, raw stream logs per threa
 - `agentd/web.py` + `agentd/web/`: the dashboard (JSON API and a plain HTML/CSS/JS front end)
 - `hooks/relay.sh`: global Claude Code hook that forwards events to agentd
 - `tts/server.py`: the `agentd-tts` text-to-speech service behind `bin/agentd-say`
+- `desktop/session.sh`: the remote desktop (Xvnc + XFCE) behind the `agentd-desktop` service
 - `bin/agentd-send`, `bin/agentd-say`, `bin/claude-rc-loop`, `systemd/*.service`, `setup/setup.sh`

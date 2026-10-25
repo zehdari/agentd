@@ -740,7 +740,9 @@ pre.code code { background: none; padding: 0; }
 .tabbar, .p-chat .tabbar { display: none !important; }
 .main { padding-bottom: 40px; }
 .topbar .system-btn { margin-left: auto; width: 36px; height: 36px; }
-.topbar .system-btn + .new-btn { margin-left: 0; }
+.topbar .system-btn + .new-btn, .topbar .system-btn + .system-btn { margin-left: 0; }
+.list li.desk-row { grid-template-columns: 16px 1fr auto; }
+.desk-row > .i { color: var(--ink-2); }
 .icon-back { width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r); }
 .icon-back:hover { background: var(--hover); }
 

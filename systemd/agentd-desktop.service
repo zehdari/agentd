@@ -1,0 +1,11 @@
+[Unit]
+Description=agentd remote desktop: Xvnc + XFCE on :5 (VNC on a private unix socket, opened from the dashboard)
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -lc 'exec %h/agents/desktop/session.sh'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -4,12 +4,12 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 // The current page. Links switch pages in place (no reload), so these change; see navigate().
 let AGENT_ID = null, SYSTEM = false, SECTION = null;
-const SECTION_TITLES = { usage: "Usage", jobs: "Jobs", files: "Files", machine: "Machine", settings: "Settings" };
+const SECTION_TITLES = { usage: "Usage", jobs: "Jobs", files: "Files", machine: "Machine", desktop: "Desktop", settings: "Settings" };
 function parseRoute() {
   const m = location.pathname.match(/^\/agents\/(\d+)/);
   AGENT_ID = m ? m[1] : null;
   SYSTEM = location.pathname === "/system";
-  const s = location.pathname.match(/^\/(usage|jobs|files|machine|settings)$/);   // the desktop rail's own pages
+  const s = location.pathname.match(/^\/(usage|jobs|files|machine|desktop|settings)$/);   // the desktop rail's own pages
   SECTION = s ? s[1] : null;
 }
 parseRoute();
@@ -269,6 +269,7 @@ const ICONS = {
   agents: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
   jobs: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   files: '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/>',
+  desktop: '<rect x="3" y="4" width="18" height="12" rx="1"/><path d="m10 8 4 2-4 2z"/><path d="M8 20h8M12 16v4"/>',
   machine: '<rect x="3" y="4" width="18" height="12" rx="1"/><path d="M8 20h8M12 16v4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   usage: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
@@ -467,6 +468,7 @@ function renderTopbar() {
   }
   const left = AGENT_ID ? `<a class="back" href="/">${icon("back")}<span>Agents</span></a>` : `<h1>Agents</h1>`;
   $("#topbar").innerHTML = `${left}
+    <a class="icon-btn system-btn" href="/desktop" aria-label="Remote desktop" title="Remote desktop">${icon("desktop")}</a>
     <a class="icon-btn system-btn" href="/system" aria-label="System: usage, machine, files" title="System">${icon("system")}</a>
     <button class="btn primary new-btn" type="button" id="new-toggle" aria-expanded="${ui.newOpen}">${icon("plus")}<span>New agent</span></button>`;
 }
@@ -805,6 +807,27 @@ function appearanceSection() {
     <div class="segmented" role="group" aria-label="Theme">${opt("auto", "Match phone")}${opt("light", "Light")}${opt("dark", "Dark")}</div></section>`;
 }
 
+// Remote desktop: noVNC in a new tab, its WebSocket bridged by agentd (same Tailscale check as this page).
+// A touch device gets the screen scaled to fit (the noVNC handle on the left has the keyboard); a laptop gets
+// the Linux desktop resized to match the browser window, with the usual mouse and keyboard.
+const touchDevice = () => matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
+function desktopUrl(which) {
+  const fit = which === "linux" && !touchDevice() ? "remote" : "scale";   // the VM's screen can't be resized from here
+  return `/rd/novnc/vnc.html?autoconnect=1&reconnect=1&reconnect_delay=2000&show_dot=1&resize=${fit}&path=rd/ws/${which}`;
+}
+function desktopSection() {
+  const row = (which, name, note) => `<li class="desk-row">${icon("desktop")}
+    <div><b>${name}</b><span class="sub">${note}</span></div>
+    <a class="btn primary" href="${desktopUrl(which)}" target="_blank" rel="noopener">${icon("ext")}<span>Open</span></a></li>`;
+  return `<section aria-labelledby="rd-h"><h2 id="rd-h">Remote desktop</h2>
+    <ul class="list">${row("linux", "Linux desktop", "XFCE on its own virtual screen, always on, even while the GPU is with Windows")}
+      ${row("windows", "Windows VM", "The Windows 11 VM's screen")}</ul>
+    <p class="set-note">${touchDevice()
+      ? "On this phone the screen is scaled to fit. Tap to click and drag to drag; the tab on the left edge has the keyboard and keys like Ctrl and Esc."
+      : "On this computer the Linux desktop resizes to fit your browser window. The Windows VM is scaled to fit."}
+      Copy and paste go through the clipboard box in noVNC's side panel.</p></section>`;
+}
+
 // One rail section on its own page (desktop; the phone reaches these through System).
 function renderSection(d) {
   const body = {
@@ -812,6 +835,7 @@ function renderSection(d) {
     jobs: () => jobsSection(d.jobs, d.now),
     files: () => filesSection(d.files),
     machine: () => machineSection(d.machine, d.now, d.window, { w: 900, h: 120 }),
+    desktop: desktopSection,
     settings: () => `<div class="settings">${discordSection()}${voiceSection()}${appearanceSection()}</div>`,
   }[SECTION]();
   $("#view").innerHTML = `<div class="one-page page-${SECTION}">${body}</div>`;

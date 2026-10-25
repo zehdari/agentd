@@ -38,6 +38,10 @@ LOGS = config.STATE_DIR / "logs"       # <thread>.jsonl: each agent's raw stream
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"   # Claude Code's own session transcripts
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PDF_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agentd" / "pdf"
+# Remote desktop (the Desktop page): noVNC in the browser, bridged here so the dashboard's own check guards it.
+NOVNC = Path(os.environ.get("AGENTD_NOVNC", "/usr/share/novnc"))
+DESKTOP_SOCK = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "agentd-desktop.sock"
+WINDOWS_VNC = os.environ.get("AGENTD_WINDOWS_VNC", "http://127.0.0.1:8006/websockify")   # dockurr/windows' websockify
 PDF_WIDTH = 1400                       # px; phones zoom in from here
 PDF_MAX_PAGES = 300
 
@@ -1220,10 +1224,91 @@ def make_app(bot) -> web.Application:
         await run("systemctl", "--user", "stop", unit + ".service", timeout=30)
         return web.json_response({"ok": True})
 
+    def same_origin(request) -> bool:
+        # A WebSocket isn't bound by CORS, so without this any page open on a tailnet device could drive the desktop.
+        origin = request.headers.get("Origin", "")
+        return bool(origin) and origin.split("://", 1)[-1].rstrip("/") == request.host
+
+    async def remote_desktop(request):
+        """Bridge noVNC's WebSocket to a VNC server: the Linux desktop (agentd-desktop.service, on a private
+        unix socket) or the Windows VM (its container's websockify on localhost)."""
+        which = request.match_info["which"]
+        if which not in ("linux", "windows"):
+            raise web.HTTPNotFound(text="no such desktop")
+        if not same_origin(request):
+            log.warning("dashboard: desktop websocket from foreign origin %r", request.headers.get("Origin"))
+            raise web.HTTPForbidden(text="cross-origin")
+        ws = web.WebSocketResponse(protocols=("binary",), compress=False, max_msg_size=0, heartbeat=30)
+        await ws.prepare(request)
+        log.info("dashboard: remote desktop %s opened", which)
+        try:
+            if which == "linux":
+                await bridge_unix(ws)
+            else:
+                await bridge_ws(ws)
+        except (OSError, ClientError, asyncio.TimeoutError) as e:
+            log.warning("dashboard: remote desktop %s: %s", which, e)
+        finally:
+            await ws.close()
+            log.info("dashboard: remote desktop %s closed", which)
+        return ws
+
+    async def bridge_unix(ws):
+        if not DESKTOP_SOCK.exists():   # start it on demand if it was stopped
+            await run("systemctl", "--user", "start", "agentd-desktop.service", timeout=30)
+            for _ in range(50):
+                if DESKTOP_SOCK.exists():
+                    break
+                await asyncio.sleep(0.2)
+        reader, writer = await asyncio.open_unix_connection(str(DESKTOP_SOCK))
+
+        async def up():
+            async for msg in ws:
+                if msg.type == web.WSMsgType.BINARY:
+                    writer.write(msg.data)
+                    await writer.drain()
+            writer.close()
+
+        async def down():
+            while data := await reader.read(1 << 16):
+                await ws.send_bytes(data)
+
+        await pump(up(), down())
+        writer.close()
+
+    async def bridge_ws(ws):
+        async with ClientSession() as session:
+            async with session.ws_connect(WINDOWS_VNC, protocols=("binary",), max_msg_size=0,
+                                          timeout=ClientTimeout(total=None, connect=10)) as far:
+                async def up():
+                    async for msg in ws:
+                        if msg.type == web.WSMsgType.BINARY:
+                            await far.send_bytes(msg.data)
+
+                async def down():
+                    async for msg in far:
+                        if msg.type == web.WSMsgType.BINARY:
+                            await ws.send_bytes(msg.data)
+
+                await pump(up(), down())
+
+    async def pump(*coros):
+        """Run both directions until either side hangs up."""
+        tasks = [asyncio.ensure_future(c) for c in coros]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                if t.exception() and not isinstance(t.exception(), (ConnectionError, ClientError)):
+                    raise t.exception()
+        finally:
+            for t in tasks:
+                t.cancel()
+
     app = web.Application(middlewares=[guard])
     app.add_routes([
         web.get("/", page), web.get("/agents/{id}", page), web.get("/system", page),
-        *[web.get(f"/{name}", page) for name in ("usage", "jobs", "files", "machine", "settings")],
+        *[web.get(f"/{name}", page) for name in ("usage", "jobs", "files", "machine", "desktop", "settings")],
+        web.get("/rd/ws/{which}", remote_desktop), web.static("/rd/novnc", NOVNC),
         web.get("/api/overview", overview), web.get("/api/agents/{id}", agent_detail),
         web.get("/api/agents/{id}/history", agent_history),
         web.get("/api/file", file), web.get("/api/pdf/pages", pdf_pages), web.get("/api/pdf/page", pdf_png),
