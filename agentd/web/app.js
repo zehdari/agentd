@@ -813,12 +813,12 @@ function desktopSection() {
     <div><b>${name}</b><span class="sub">${note}</span></div>
     <a class="btn primary" href="${desktopUrl(which)}" target="_blank" rel="noopener">${icon("ext")}<span>Open</span></a></li>`;
   return `<section aria-labelledby="rd-h"><h2 id="rd-h">Remote desktop</h2>
-    <ul class="list">${row("linux", "Linux desktop", "XFCE on its own virtual screen, always on, even while the GPU is with Windows")}
-      ${row("windows", "Windows VM", "Streamed by Sunshine over WebRTC, GPU-accelerated while the 3090 is with Windows. Pick Desktop")}</ul>
+    <ul class="list">${row("linux", "Ubuntu desktop", "Your real GNOME desktop, streamed from the 3090. Pick Cam-PC Ubuntu, then Desktop. Needs the GPU on Linux")}
+      ${row("windows", "Windows VM", "Streamed by Sunshine over WebRTC, GPU-accelerated while the 3090 is with Windows. Pick Desktop")}
+      ${row("kasm", "Virtual Linux desktop", "XFCE over KasmVNC: slower, but always on, even while the GPU is with Windows")}</ul>
     <p class="set-note">${touchDevice()
       ? "On this phone the screen is scaled to fit. Tap to click and drag to drag; the tab on the left edge has the keyboard and keys like Ctrl and Esc."
-      : "On this computer the Linux desktop resizes to fit your browser window."}
-      On Linux, copy and paste go through the clipboard in KasmVNC's side panel.</p></section>${gpuSection()}`;
+      : "Ctrl+Shift+1 opens the virtual desktop's panel (clipboard, fullscreen); Cmd acts as the Super key there."}</p></section>${gpuSection()}`;
 }
 
 // The GPU switch: moves the RTX 3090 between Linux and the Windows VM (`winvm gpu|nogpu`, run as its own unit).
