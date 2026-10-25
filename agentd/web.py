@@ -715,7 +715,10 @@ class Dashboard:
             return
         try:
             for msg in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "agentd", "version": "1"}}},
-                        {"method": "initialized"}, {"id": 2, "method": "account/rateLimits/read", "params": None}):
+                        {"method": "initialized"},
+                        # Refreshes an expired ChatGPT token first; only a real turn would otherwise.
+                        {"id": 3, "method": "account/read", "params": {"refreshToken": True}},
+                        {"id": 2, "method": "account/rateLimits/read", "params": None}):
                 proc.stdin.write(json.dumps(msg).encode() + b"\n")
             await proc.stdin.drain()
             while True:
