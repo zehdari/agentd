@@ -807,14 +807,7 @@ function appearanceSection() {
     <div class="segmented" role="group" aria-label="Theme">${opt("auto", "Match phone")}${opt("light", "Light")}${opt("dark", "Dark")}</div></section>`;
 }
 
-// Remote desktop: noVNC in a new tab, its WebSocket bridged by agentd (same Tailscale check as this page).
-// A touch device gets the screen scaled to fit (the noVNC handle on the left has the keyboard); a laptop gets
-// the Linux desktop resized to match the browser window, with the usual mouse and keyboard.
-const touchDevice = () => matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
-function desktopUrl(which) {
-  const fit = which === "linux" && !touchDevice() ? "remote" : "scale";   // the VM's screen can't be resized from here
-  return `/rd/novnc/vnc.html?autoconnect=1&reconnect=1&reconnect_delay=2000&show_dot=1&resize=${fit}&path=rd/ws/${which}`;
-}
+// Remote desktop: noVNC in a new tab (desktopUrl() and touchDevice() are in desktop.js, shared with /rd/open/*).
 function desktopSection() {
   const row = (which, name, note) => `<li class="desk-row">${icon("desktop")}
     <div><b>${name}</b><span class="sub">${note}</span></div>
@@ -825,8 +818,64 @@ function desktopSection() {
     <p class="set-note">${touchDevice()
       ? "On this phone the screen is scaled to fit. Tap to click and drag to drag; the tab on the left edge has the keyboard and keys like Ctrl and Esc."
       : "On this computer the Linux desktop resizes to fit your browser window. The Windows VM is scaled to fit."}
-      Copy and paste go through the clipboard box in noVNC's side panel.</p></section>`;
+      Copy and paste go through the clipboard box in noVNC's side panel.</p></section>${gpuSection()}`;
 }
+
+// The GPU switch: moves the RTX 3090 between Linux and the Windows VM (`winvm gpu|nogpu`, run as its own unit).
+const gpu = { state: null, at: 0, busy: false, confirm: null, error: "" };
+async function loadGpu(force = false) {
+  if (gpu.busy || (!force && Date.now() - gpu.at < 3000)) return;
+  gpu.busy = true;
+  try { gpu.state = await api("/api/gpu"); gpu.error = ""; } catch (err) { gpu.error = err.message; }
+  gpu.busy = false; gpu.at = Date.now();
+  if (SECTION === "desktop") rerender();
+}
+const GPU_WARN = {
+  windows: `Windows restarts, so save your work there first: anything unsaved (SolidWorks included) is lost.
+    The monitors then show Windows, and the Linux login screen is gone until the GPU comes back.
+    agentd, this page and the Linux remote desktop keep working. Takes 1–3 minutes.`,
+  linux: `Windows restarts with software graphics, so save your work there first: anything unsaved is lost.
+    The monitors show the Linux login screen again. Takes 1–3 minutes.`,
+};
+function gpuSection() {
+  loadGpu();
+  const st = gpu.state, owner = st ? st.owner : null, busy = st && st.switching;
+  const opt = (v, label) => `<button type="button" data-gpu="${v}" aria-pressed="${owner === v}"${busy || !st ? " disabled" : ""}>${label}</button>`;
+  const name = { windows: "Windows", linux: "Linux" };
+  let status;
+  if (!st) status = gpu.error ? `Couldn't read the GPU's state: ${esc(gpu.error)}` : "Checking…";
+  else if (busy) status = "Switching… this takes 1–3 minutes. The Windows VM restarts along the way.";
+  else status = `The RTX 3090 is with <b>${owner === "unknown" ? `an unknown driver (${esc(st.driver || "none")})` : name[owner]}</b>.
+    ${st.vm ? `Windows VM: ${esc(st.vm)}.` : ""}`;
+  const log = st && (busy || st.failed) && st.log.length
+    ? `<pre class="gpu-log">${st.failed ? "Last switch failed:\n" : ""}${esc(st.log.join("\n"))}</pre>` : "";
+  const to = gpu.confirm;
+  const confirm = to && !busy ? `<div class="gpu-confirm" role="alertdialog" aria-labelledby="gpu-c-h">
+      <p class="set-label" id="gpu-c-h">Move the GPU to ${name[to]}?</p>
+      <p class="set-note">${GPU_WARN[to]}</p>
+      <div class="gpu-confirm-acts"><button class="btn danger" type="button" data-gpu-go="${to}">Move GPU to ${name[to]}</button>
+        <button class="btn" type="button" data-gpu-cancel>Cancel</button></div></div>` : "";
+  return `<section aria-labelledby="gpu-h"><h2 id="gpu-h">GPU</h2>
+    <p class="set-label" id="gpu-l">RTX 3090 goes to</p>
+    <div class="segmented" role="group" aria-labelledby="gpu-l">${opt("linux", "Linux")}${opt("windows", "Windows")}</div>
+    <p class="set-note">${status}</p>${log}${confirm}</section>`;
+}
+document.addEventListener("click", async e => {
+  const pick = e.target.closest("[data-gpu]");
+  if (pick && !pick.disabled) {
+    gpu.confirm = gpu.state && pick.dataset.gpu !== gpu.state.owner ? pick.dataset.gpu : null;
+    rerender();
+    return;
+  }
+  if (e.target.closest("[data-gpu-cancel]")) { gpu.confirm = null; rerender(); return; }
+  const go = e.target.closest("[data-gpu-go]");
+  if (go) {
+    go.disabled = true;
+    try { await api("/api/gpu", { to: go.dataset.gpuGo }); } catch (err) { alert(err.message); }
+    gpu.confirm = null;
+    await loadGpu(true);
+  }
+});
 
 // One rail section on its own page (desktop; the phone reaches these through System).
 function renderSection(d) {
@@ -835,7 +884,7 @@ function renderSection(d) {
     jobs: () => jobsSection(d.jobs, d.now),
     files: () => filesSection(d.files),
     machine: () => machineSection(d.machine, d.now, d.window, { w: 900, h: 120 }),
-    desktop: desktopSection,
+    desktop: () => `<div class="settings">${desktopSection()}</div>`,
     settings: () => `<div class="settings">${discordSection()}${voiceSection()}${appearanceSection()}</div>`,
   }[SECTION]();
   $("#view").innerHTML = `<div class="one-page page-${SECTION}">${body}</div>`;

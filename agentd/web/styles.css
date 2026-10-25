@@ -743,6 +743,12 @@ pre.code code { background: none; padding: 0; }
 .topbar .system-btn + .new-btn, .topbar .system-btn + .system-btn { margin-left: 0; }
 .list li.desk-row { grid-template-columns: 16px 1fr auto; }
 .desk-row > .i { color: var(--ink-2); }
+.segmented button:disabled { cursor: default; opacity: .6; }
+.gpu-log { margin: 10px 0 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--rule-soft); border-radius: var(--r);
+  font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto; }
+.gpu-confirm { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--danger-rule); background: var(--danger-tint); border-radius: var(--r); max-width: 62ch; }
+.gpu-confirm .set-note { margin-top: 0; color: var(--ink-2); }
+.gpu-confirm-acts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .icon-back { width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r); }
 .icon-back:hover { background: var(--hover); }
 

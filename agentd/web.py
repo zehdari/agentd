@@ -41,6 +41,9 @@ PDF_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "ag
 # Remote desktop (the Desktop page): noVNC in the browser, bridged here so the dashboard's own check guards it.
 NOVNC = Path(os.environ.get("AGENTD_NOVNC", "/usr/share/novnc"))
 DESKTOP_SOCK = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "agentd-desktop.sock"
+# The GPU switch on the Desktop page: `winvm gpu|nogpu` (~/winvm) moves the RTX 3090 between Linux and the VM.
+WINVM = os.environ.get("AGENTD_WINVM", str(Path.home() / ".local" / "bin" / "winvm"))
+SWITCH_UNIT = "winvm-switch"
 WINDOWS_VNC = os.environ.get("AGENTD_WINDOWS_VNC", "http://127.0.0.1:8006/websockify")   # dockurr/windows' websockify
 PDF_WIDTH = 1400                       # px; phones zoom in from here
 PDF_MAX_PAGES = 300
@@ -1304,11 +1307,64 @@ def make_app(bot) -> web.Application:
             for t in tasks:
                 t.cancel()
 
+    async def open_desktop(request):
+        """linux.zehdari.com / windows.zehdari.com land here: pick the viewer for this device and go."""
+        which = request.match_info["which"]
+        if which not in ("linux", "windows"):
+            raise web.HTTPNotFound(text="no such desktop")
+        return web.Response(content_type="text/html", text=f"""<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{which.title()} desktop</title>
+<script src="/static/desktop.js"></script><script>location.replace(desktopUrl("{which}"));</script>""")
+
+    async def gpu_status() -> dict:
+        out, unit, log_ = await asyncio.gather(
+            run(WINVM, "status", timeout=20),
+            run("systemctl", "--user", "show", SWITCH_UNIT, "-p", "ActiveState", "-p", "Result", "-p", "LoadState"),
+            run("journalctl", "--user", "-u", SWITCH_UNIT, "-n", "8", "-o", "cat", "--no-pager", timeout=10))
+        driver = re.search(r"3090 driver:\s*(\S+)", out)
+        vm = re.search(r"VM:\s*(.+)", out)
+        props = dict(line.split("=", 1) for line in unit.splitlines() if "=" in line)
+        switching = props.get("ActiveState") in ("active", "activating", "deactivating")
+        driver = driver.group(1) if driver else ""
+        return {
+            "owner": "windows" if driver == "vfio-pci" else "linux" if driver == "nvidia" else "unknown",
+            "driver": driver, "vm": vm.group(1).strip() if vm else "",
+            "switching": switching, "failed": props.get("ActiveState") == "failed",
+            "log": [line for line in log_.splitlines() if line.strip()][-6:],
+        }
+
+    async def gpu(request):
+        return web.json_response(await gpu_status())
+
+    async def gpu_switch(request):
+        """Move the 3090 to Windows ("windows": winvm gpu) or back to Linux ("linux": winvm nogpu). It takes a few
+        minutes and restarts the VM and gdm, so it runs as its own systemd unit, not under agentd."""
+        if not same_origin(request):
+            raise web.HTTPForbidden(text="cross-origin")
+        to = (await body(request)).get("to")
+        if to not in ("windows", "linux"):
+            return web.json_response({"error": "to must be windows or linux"}, status=400)
+        st = await gpu_status()
+        if st["switching"]:
+            return web.json_response({"error": "A GPU switch is already running."}, status=409)
+        if st["owner"] == to:
+            return web.json_response({"error": f"The GPU is already with {to.title()}."}, status=409)
+        await run("systemctl", "--user", "reset-failed", SWITCH_UNIT)   # a failed earlier run keeps the name taken
+        proc = await asyncio.create_subprocess_exec(
+            "systemd-run", "--user", f"--unit={SWITCH_UNIT}", f"--description=winvm: GPU to {to}",
+            "-E", f"PATH={os.environ.get('PATH', '')}", WINVM, "gpu" if to == "windows" else "nogpu",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await proc.communicate()
+        if proc.returncode:
+            return web.json_response({"error": err.decode(errors="replace").strip() or "systemd-run failed"}, status=500)
+        log.info("dashboard: GPU switch to %s started", to)
+        return web.json_response({"ok": True})
+
     app = web.Application(middlewares=[guard])
     app.add_routes([
         web.get("/", page), web.get("/agents/{id}", page), web.get("/system", page),
         *[web.get(f"/{name}", page) for name in ("usage", "jobs", "files", "machine", "desktop", "settings")],
-        web.get("/rd/ws/{which}", remote_desktop), web.static("/rd/novnc", NOVNC),
+        web.get("/rd/ws/{which}", remote_desktop), web.get("/rd/open/{which}", open_desktop), web.static("/rd/novnc", NOVNC),
         web.get("/api/overview", overview), web.get("/api/agents/{id}", agent_detail),
         web.get("/api/agents/{id}/history", agent_history),
         web.get("/api/file", file), web.get("/api/pdf/pages", pdf_pages), web.get("/api/pdf/page", pdf_png),
@@ -1318,6 +1374,7 @@ def make_app(bot) -> web.Application:
         web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/delete", delete),
         web.post("/api/agents/{id}/effort", effort),
         web.post("/api/agents/{id}/seen", seen), web.post("/api/jobs/{unit}/stop", stop_job),
+        web.get("/api/gpu", gpu), web.post("/api/gpu", gpu_switch),
         web.post("/api/usage/refresh", refresh_usage), web.post("/api/settings", settings),
         web.static("/static", STATIC),
     ])
