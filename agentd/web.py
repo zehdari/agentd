@@ -263,6 +263,7 @@ class AgentLog:
         self.model: str | None = None              # what the last run actually used, e.g. claude-opus-5-5
         self.rate: tuple[float, dict] | None = None   # latest plan-limit reading (rate_limit_event)
         self.costs: list[list] = []                   # [time, API-equivalent $] per result
+        self.subagents: dict[str, dict] = {}          # Agent tool_use id -> what it's doing (Details → Subagents)
         self._last_cost = 0.0
         self._new_run = True
 
@@ -326,13 +327,38 @@ class AgentLog:
             self.segs[-1][1] = t
         return t
 
+    def _subagent_task(self, ev: dict) -> None:
+        """Claude Code's task events: a subagent's progress, and its status and report when it ends."""
+        sub = self.subagents.get(ev.get("tool_use_id") or "") or next(
+            (s for s in self.subagents.values() if s["agent_id"] and s["agent_id"] == ev.get("task_id")), None)
+        if sub is None:
+            return
+        sub["agent_id"] = sub["agent_id"] or ev.get("task_id")
+        if ev.get("subtype") == "task_progress":
+            usage = ev.get("usage") or {}
+            sub["progress"] = ev.get("description") or sub["progress"]
+            sub["tools"] = max(sub["tools"], usage.get("tool_uses") or 0)
+            return
+        status = ev.get("status") or (ev.get("patch") or {}).get("status")
+        if status and status != "running":
+            sub["status"] = {"killed": "stopped", "error": "failed"}.get(status, status)
+            sub["end"] = sub["end"] or ((ev.get("patch") or {}).get("end_time") or 0) / 1000 or self.last_t
+        if ev.get("summary"):
+            sub["summary"] = short(ev["summary"], 1500)
+
     def _event(self, ev: dict) -> None:
         kind = ev.get("type")
         if kind == "system" and ev.get("subtype") == "init":
             self.model = ev.get("model") or self.model
+            for sub in self.subagents.values():
+                if sub["status"] == "running":
+                    sub["status"] = "stopped"
             if ev.get("provider") != "codex":
                 models.saw_claude(self.model)
             self._new_run = True
+            return
+        if kind == "system" and ev.get("subtype") in ("task_progress", "task_updated", "task_notification"):
+            self._subagent_task(ev)
             return
         if kind == "rate_limit_event":
             self.rate = (self.last_t or time.time(), ev.get("rate_limit_info") or {})
@@ -370,6 +396,17 @@ class AgentLog:
                         name = ":".join(name.split("__")[1:])
                     detail = tool_detail(name, block.get("input"))
                     self.entries.append({"kind": "tool", "t": t, "name": name, "detail": detail, "nested": nested})
+                    if name in ("Agent", "Task"):
+                        inp = block.get("input") or {}
+                        self.subagents[block.get("id", "")] = {
+                            "id": block.get("id", ""), "agent_id": None, "session": ev.get("session_id"),
+                            "description": inp.get("description") or short(inp.get("prompt", ""), 80),
+                            "type": inp.get("subagent_type") or "general-purpose", "model": inp.get("model"),
+                            "prompt": short(inp.get("prompt", ""), 600), "background": bool(inp.get("run_in_background")),
+                            "status": "running", "t": t, "end": None, "progress": "", "tools": 0, "summary": ""}
+                    if (sub := self.subagents.get(ev.get("parent_tool_use_id") or "")) is not None:
+                        sub["tools"] += 1
+                        sub["progress"] = f"{name} {short(detail, 140)}"
                     self.tools[name] = self.tools.get(name, 0) + 1
                     self.last_tool = f"{name} {short(detail, 140)}"
                     if t:
@@ -387,7 +424,21 @@ class AgentLog:
                                 self.units[unit] = t or time.time()
             return
         if kind == "user":
-            self._at(parse_ts(ev.get("timestamp")))
+            t = self._at(parse_ts(ev.get("timestamp")))
+            res = ev.get("tool_use_result")
+            content = ev.get("message", {}).get("content")
+            for block in content if isinstance(content, list) and isinstance(res, dict) else []:
+                sub = self.subagents.get(block.get("tool_use_id") or "") if block.get("type") == "tool_result" else None
+                if sub is None:
+                    continue
+                sub["agent_id"] = res.get("agentId") or sub["agent_id"]
+                sub["model"] = res.get("resolvedModel") or sub["model"]
+                if res.get("status") == "async_launched":
+                    sub["background"] = True
+                elif sub["status"] == "running":   # it ran in the foreground; this is its report
+                    sub["status"] = "failed" if block.get("is_error") else "completed"
+                    sub["end"] = t
+                    sub["summary"] = short(text_of(res.get("content")) or text_of(block.get("content")), 1500)
             return
         if kind == "result":
             cost = ev.get("total_cost_usd")
@@ -401,6 +452,50 @@ class AgentLog:
             if self.segs:
                 self.segs[-1][2] = False
             self._new_run = True
+
+
+# ---------------------------------------------------------------- a subagent's own conversation
+
+def subagent_entries(log_path: Path, sub: dict, limit: int = 400) -> list[dict]:
+    """What one subagent said and did: its Claude Code transcript when there is one, else its
+    messages in the parent's stream (parent_tool_use_id)."""
+    events = []
+    if sub.get("agent_id") and sub.get("session"):
+        for path in glob.glob(str(CLAUDE_PROJECTS / "*" / glob.escape(sub["session"]) / "subagents"
+                                  / f"agent-{glob.escape(sub['agent_id'])}.jsonl")):
+            with open(path, "rb") as f:
+                events = [ev for raw in f if (ev := _json(raw))]
+            break
+    if not events:
+        needle = sub["id"].encode()
+        with open(log_path, "rb") as f:
+            events = [ev for raw in f if needle in raw and (ev := _json(raw)) and ev.get("parent_tool_use_id") == sub["id"]]
+        events.insert(0, {"type": "user", "message": {"content": sub.get("prompt", "")}})
+    out: list[dict] = []
+    for ev in events:
+        kind, t = ev.get("type"), parse_ts(ev.get("timestamp"))
+        content = (ev.get("message") or {}).get("content")
+        if kind == "user" and isinstance(content, str) and content.strip() and not any(e["kind"] == "you" for e in out):
+            out.append({"kind": "you", "t": t, "text": content.strip()})
+        elif kind == "assistant":
+            for block in content or []:
+                btype = block.get("type")
+                if btype == "text" and block.get("text", "").strip():
+                    out.append({"kind": "claude", "t": t, "text": block["text"].strip()})
+                elif btype == "tool_use":
+                    name = block.get("name", "")
+                    if name.startswith("mcp__"):
+                        name = ":".join(name.split("__")[1:])
+                    out.append({"kind": "tool", "t": t, "name": name, "detail": tool_detail(name, block.get("input"))})
+    return out[:1] + out[1:][-limit:] if len(out) > limit + 1 else out
+
+
+def _json(raw: bytes) -> dict | None:
+    try:
+        ev = json.loads(raw)
+        return ev if isinstance(ev, dict) else None
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------- editing a message into a new chat
@@ -830,6 +925,8 @@ class Dashboard:
             "resume": resume, "tools": al.tools, "total_entries": total, "entries_from": start,
             "entries": entry_list(al.entries[start:]),
             "jobs": jobs, "file_list": files, "efforts": models.efforts_for(agent.model),
+            "subagents": [{**sub, "model_label": models.label(sub["model"]) if sub["model"] else ""}
+                          for sub in al.subagents.values()],
             # the title is cut to 90 characters; the Details panel shows the whole first message
             "prompt": short(next((e["text"] for e in al.entries if e["kind"] == "you" and e["text"]), agent.title), 1000),
             "parent": ({"id": str(agent.parent), "title": parent.title}
@@ -1015,6 +1112,16 @@ def make_app(bot) -> web.Application:
         except ValueError:
             after = 0
         return web.json_response(await dash.agent_detail(agent_or_404(request), after))
+
+    async def subagent(request):
+        agent = agent_or_404(request)
+        al = dash.log_for(agent)
+        sub = al.subagents.get(request.match_info["sub"])
+        if sub is None:
+            raise web.HTTPNotFound(text="no such subagent")
+        entries = await asyncio.to_thread(subagent_entries, al.path, sub)
+        return web.json_response({"now": time.time(), "entries": entries,
+                                  "sub": {**sub, "model_label": models.label(sub["model"]) if sub["model"] else ""}})
 
     async def agent_history(request):
         try:
@@ -1390,7 +1497,7 @@ def make_app(bot) -> web.Application:
         *[web.get(f"/{name}", page) for name in ("usage", "jobs", "files", "machine", "desktop", "settings")],
         web.get("/rd/ws/{which}", remote_desktop), web.get("/rd/open/{which}", open_desktop), web.static("/rd/novnc", NOVNC),
         web.get("/api/overview", overview), web.get("/api/agents/{id}", agent_detail),
-        web.get("/api/agents/{id}/history", agent_history),
+        web.get("/api/agents/{id}/history", agent_history), web.get("/api/agents/{id}/subagents/{sub}", subagent),
         web.get("/api/file", file), web.get("/api/pdf/pages", pdf_pages), web.get("/api/pdf/page", pdf_png),
         web.get("/api/models", model_catalog),
         web.post("/api/agents", new_agent), web.post("/api/agents/{id}/message", message),

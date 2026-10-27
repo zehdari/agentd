@@ -45,6 +45,8 @@ const ui = {
   attach: [],               // files waiting to go with the next reply
   newFiles: [],             // files for the new-agent form
   details: false,           // the agent page's side panel
+  sub: null,                // the subagent open in Details (its Agent tool call id)
+  subData: null, subAt: 0, subOpen: new Set(), subScroll: false,
   editing: null,            // a message of yours being edited into a new chat: {key, text}
   data: null,
 };
@@ -1057,6 +1059,87 @@ function convoHtml(d) {
   return out.join("");
 }
 
+// Details → Subagents: what each subagent was asked, what it's doing now, and its report.
+const SUB_STATE = { running: ["running", "Running"], completed: ["done", "Done"], failed: ["failed", "Failed"], stopped: ["stopped", "Stopped"] };
+function subState(s) {
+  const [cls, label] = SUB_STATE[s.status] || ["done", s.status];
+  return `<span class="state state-${cls}"><i></i>${label}</span>`;
+}
+function subMeta(s, now) {
+  const len = s.t ? dur((s.end || now) - s.t) : "";
+  return [s.type, s.model_label, `${s.tools} tool call${s.tools === 1 ? "" : "s"}`, len, s.background ? "background" : ""].filter(Boolean).map(esc).join(" · ");
+}
+function subagentsSection(d) {
+  if (!d.subagents || !d.subagents.length) return "";
+  const subs = [...d.subagents].reverse();   // newest first
+  return `<section aria-labelledby="dsa-h"><h2 id="dsa-h">Subagents</h2><ul class="list subs">${subs.map(s => `
+    <li><button type="button" class="sub-open" data-sub="${esc(s.id)}">
+      <span class="sub-top"><b>${esc(s.description)}</b>${subState(s)}</span>
+      <span class="sub">${subMeta(s, d.now)}</span>
+      ${s.status === "running" && s.progress ? `<code class="sub-now">${esc(s.progress.split("\n")[0])}</code>`
+        : s.summary ? `<span class="sub-sum">${esc(s.summary.replace(/\s+/g, " ").slice(0, 180))}</span>` : ""}
+    </button></li>`).join("")}</ul></section>`;
+}
+
+// One subagent's own conversation, shown in place of the Details list (read-only).
+function subChatHtml(d) {
+  const s = (ui.subData && ui.subData.sub.id === ui.sub ? ui.subData.sub : null) || (d.subagents || []).find(x => x.id === ui.sub);
+  if (!s) return `<section><button class="btn sm" type="button" data-sub-back>${icon("back")}<span>Details</span></button><p class="empty">Subagent not found.</p></section>`;
+  const entries = ui.subData && ui.subData.sub.id === ui.sub ? ui.subData.entries : null;
+  const out = [];
+  for (let i = 0; entries && i < entries.length; i++) {
+    const e = entries[i];
+    if (e.kind === "tool") {
+      const start = i;
+      while (i + 1 < entries.length && entries[i + 1].kind === "tool") i++;
+      const group = entries.slice(start, i + 1), open = ui.subOpen.has(start);
+      out.push(`<div class="tools-row${open ? " open" : ""}"><button class="tools-toggle" type="button" data-sub-expand="${start}" aria-expanded="${open}">
+        ${icon("chev", "i i-sm chev")}<span class="tools-sum">${esc(toolSummary(group))}</span></button>
+        ${open ? `<ul class="calls full">${group.map(c => `<li><span class="tool">${esc(c.name)}${c.t ? ` <time>${hm(c.t)}</time>` : ""}</span><pre>${esc(c.detail.length > 4000 ? c.detail.slice(0, 4000) + "\n…" : c.detail)}</pre></li>`).join("")}</ul>` : ""}</div>`);
+    } else if (e.kind === "you") {
+      const full = ui.subOpen.has("prompt") || e.text.length < 400;
+      out.push(`<div class="bubble-row"><p class="bubble-note">Asked by the main agent</p><div class="bubble${full ? "" : " clamped"}"><div class="md">${md(e.text)}</div></div>
+        ${e.text.length < 400 ? "" : `<button class="btn sm" type="button" data-sub-expand="prompt">${full ? "Show less" : "Show all"}</button>`}</div>`);
+    } else if (e.kind === "claude") {
+      out.push(`<div class="reply md">${md(e.text)}</div>`);
+    }
+  }
+  if (entries && !entries.some(e => e.kind === "claude") && s.summary) out.push(`<div class="reply md">${md(s.summary)}</div>`);
+  if (s.status === "running") out.push(`<p class="working"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(s.progress ? s.progress.split("\n")[0] : "Working")}</p>`);
+  return `<section class="sub-chat" aria-labelledby="sc-h">
+    <button class="btn sm" type="button" data-sub-back>${icon("back")}<span>Details</span></button>
+    <h2 id="sc-h" class="sub-title">${esc(s.description)}</h2>
+    <p class="sub-meta">${subState(s)}<span class="sub">${subMeta(s, d.now)}</span></p>
+    <div class="convo">${entries ? out.join("") || `<p class="empty">Nothing logged yet.</p>` : `<p class="loading">Loading…</p>`}</div></section>`;
+}
+
+async function loadSub(id) {
+  const want = ui.sub;
+  if (!want || ui.subBusy) return;
+  const cur = ui.subData && ui.subData.sub.id === want ? ui.subData : null;
+  if (cur && (cur.sub.status !== "running" || Date.now() - ui.subAt < 3000)) return;
+  ui.subBusy = true;
+  try {
+    const data = await api(`/api/agents/${id}/subagents/${encodeURIComponent(want)}`);
+    if (ui.sub === want) { ui.subData = data; ui.subAt = Date.now(); }
+  } catch (err) {
+    if (ui.sub === want) { ui.subData = { sub: { id: want, status: "failed", description: err.message, tools: 0 }, entries: [] }; ui.subAt = Date.now(); }
+  }
+  ui.subBusy = false;
+  if (ui.sub === want && String(AGENT_ID) === String(id) && ui.data) renderDetails(ui.data);
+}
+
+function renderDetails(d) {
+  const box = $("#details");
+  if (!box) return;
+  if (ui.sub) {
+    const nearBottom = box.clientHeight + box.scrollTop > box.scrollHeight - 120;
+    box.innerHTML = subChatHtml(d);
+    if (ui.subScroll || nearBottom) { box.scrollTop = box.scrollHeight; ui.subScroll = !ui.subData; }
+    loadSub(d.id);
+  } else box.innerHTML = detailsHtml(d);
+}
+
 function detailsHtml(d) {
   const effortSel = `<label class="select"><span>Effort</span><select id="effort">${["default", ...d.efforts].map(e =>
     `<option value="${esc(e)}"${(d.effort || "default") === e ? " selected" : ""}>${esc(e === "default" ? withDefault(e, d.default_effort) : e)}</option>`).join("")}</select></label>`;
@@ -1079,6 +1162,7 @@ function detailsHtml(d) {
           ? `<button class="btn danger" type="button" data-delete="${d.id}">${icon("trash")}<span>Delete for good?</span></button>`
           : `<button class="btn danger" type="button" data-arm="delete:${d.id}">${icon("trash")}<span>Delete chat</span></button>`}</div>
     </section>
+    ${subagentsSection(d)}
     <section aria-labelledby="dt-h"><h2 id="dt-h">Last 2 hours</h2>
       ${d.segs.length ? `<div class="d-track">${axis(d.now, d.window)}${track(d, d.now, d.window, { w: 320, h: 36, big: true })}</div>
         <p class="d-track-key"><span><i class="k-steer"></i>your message mid-run</span><span>each tick is a tool call</span></p>`
@@ -1145,7 +1229,7 @@ function renderDetail(d) {
   tickWorking();
   if (ui.firstDetail && location.hash === "#reply") $("#m").focus();
   ui.firstDetail = false;
-  $("#details").innerHTML = detailsHtml(d);
+  renderDetails(d);
 }
 
 // The "Working · 12 s" timer counts on its own between polls, on the server's clock.
@@ -1311,6 +1395,7 @@ function navigate(url, push = true) {
   parseRoute();
   // Where Details covers the chat (phones, narrow windows), opening a chat again shows the chat, not Details.
   if (AGENT_ID !== prev && matchMedia("(max-width: 1240px)").matches) ui.details = false;
+  if (AGENT_ID !== prev) { ui.sub = null; ui.subData = null; }
   ui.firstDetail = true;
   ui.convoKey = "";
   ui.confirm = null;
@@ -1440,6 +1525,17 @@ document.addEventListener("click", e => {
     renderNewAgent();
   } else if (t.id === "usage-refresh") {
     refreshUsage(true);
+  } else if (t.dataset.sub) {
+    ui.sub = t.dataset.sub; ui.subData = null; ui.subOpen.clear(); ui.subScroll = true;
+    rerender();
+  } else if ("subBack" in t.dataset) {
+    ui.sub = null; ui.subData = null;
+    rerender();
+    $("#details").scrollTop = 0;
+  } else if (t.dataset.subExpand) {
+    const k = t.dataset.subExpand === "prompt" ? "prompt" : +t.dataset.subExpand;
+    ui.subOpen.has(k) ? ui.subOpen.delete(k) : ui.subOpen.add(k);
+    rerender();
   } else if (t.id === "details-toggle") {
     ui.details = !ui.details;
     rerender();
