@@ -799,7 +799,7 @@ const swReady = pushSupported() ? navigator.serviceWorker.register("/sw.js", { s
 swReady.then(async reg => {
   pushState.sub = reg && await reg.pushManager.getSubscription().catch(() => null);
   pushState.checked = true;
-  if (SECTION === "settings") rerender();
+  if (SECTION === "settings" || SYSTEM) rerender();
 });
 const b64bytes = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
 
@@ -938,7 +938,7 @@ function renderSection(d) {
 function renderSystem(d) {
   $("#view").innerHTML = `<div class="system">
     <div class="sys-col">${usageSection(d.usage, d.now)}${machineSection(d.machine, d.now, d.window)}</div>
-    <div class="sys-col">${jobsSection(d.jobs, d.now)}${filesSection(d.files)}${servicesSection(d.services)}${discordSection()}${appearanceSection()}</div>
+    <div class="sys-col">${jobsSection(d.jobs, d.now)}${filesSection(d.files)}${servicesSection(d.services)}${pushSection()}${discordSection()}${appearanceSection()}</div>
   </div>`;
 }
 
