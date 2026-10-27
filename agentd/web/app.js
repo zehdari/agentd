@@ -790,6 +790,51 @@ function discordSection() {
       Agents started from Discord keep their threads either way, and replies you send them from here show up there too.</p></section>`;
 }
 
+// Web Push (Settings → Notifications): this device subscribes through the service worker at /sw.js.
+const pushState = { sub: null, checked: false, busy: false, msg: "" };
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const swReady = pushSupported() ? navigator.serviceWorker.register("/sw.js", { scope: "/" })
+  .then(() => navigator.serviceWorker.ready).catch(() => null) : Promise.resolve(null);
+swReady.then(async reg => {
+  pushState.sub = reg && await reg.pushManager.getSubscription().catch(() => null);
+  pushState.checked = true;
+  if (SECTION === "settings") rerender();
+});
+const b64bytes = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
+
+async function pushToggle(on) {
+  // Ask first, while the tap still counts as a user gesture (Safari requires it).
+  const perm = on ? Notification.requestPermission() : null;
+  const reg = await swReady;
+  if (!reg) throw new Error("This browser can't register the service worker.");
+  if (on) {
+    if (await perm !== "granted") throw new Error("Notifications are blocked for agentd in this browser's settings.");
+    const { key } = await api("/api/push/key");
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64bytes(key) });
+    await api("/api/push/subscribe", { sub: sub.toJSON() });
+    pushState.sub = sub;
+    pushState.msg = "On. You'll get a notification when an agent finishes, fails or needs you.";
+  } else {
+    const sub = pushState.sub || await reg.pushManager.getSubscription();
+    if (sub) { await api("/api/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); }
+    pushState.sub = null; pushState.msg = "Off on this device.";
+  }
+}
+
+function pushSection() {
+  const head = `<section aria-labelledby="pn-h"><h2 id="pn-h">Notifications</h2>`;
+  if (!pushSupported()) return `${head}<p class="set-note">${/iPhone|iPad/.test(navigator.userAgent) && !standalone()
+    ? "On iPhone, notifications only work from the home-screen app: Share → Add to Home Screen, then open agentd from there."
+    : "This browser doesn't support Web Push."}</p></section>`;
+  const on = !!pushState.sub;
+  const opt = (v, label) => `<button type="button" data-push="${v}" aria-pressed="${on === v}"${pushState.checked ? "" : " disabled"}>${label}</button>`;
+  return `${head}<p class="set-label" id="pn-l">Push notifications on this device</p>
+    <div class="segmented" role="group" aria-labelledby="pn-l">${opt(false, "Off")}${opt(true, "On")}</div>
+    ${on ? `<p><button type="button" class="btn" data-push-test="1">Send a test</button></p>` : ""}
+    <p class="set-note">${esc(pushState.msg) || "Agents finishing or failing, sessions waiting on you, and <code>agentd-send --alert</code>. Tapping one opens that agent. Works off the tailnet too; opening the dashboard still needs Tailscale."}</p></section>`;
+}
+
 function voiceSection() {
   const on = voiceAuto();
   const opt = (v, label) => `<button type="button" data-voice-auto="${v}" aria-pressed="${on === v}">${label}</button>`;
@@ -885,7 +930,7 @@ function renderSection(d) {
     files: () => filesSection(d.files),
     machine: () => machineSection(d.machine, d.now, d.window, { w: 900, h: 120 }),
     desktop: () => `<div class="settings">${desktopSection()}</div>`,
-    settings: () => `<div class="settings">${discordSection()}${voiceSection()}${appearanceSection()}</div>`,
+    settings: () => `<div class="settings">${pushSection()}${discordSection()}${voiceSection()}${appearanceSection()}</div>`,
   }[SECTION]();
   $("#view").innerHTML = `<div class="one-page page-${SECTION}">${body}</div>`;
 }
@@ -1429,6 +1474,13 @@ document.addEventListener("click", e => {
   } else if (t.dataset.voiceAuto) {
     localStorage.setItem("agentd-voice-auto", t.dataset.voiceAuto === "true" ? "on" : "off");
     rerender();
+  } else if (t.dataset.push) {
+    act(async () => {
+      try { await pushToggle(t.dataset.push === "true"); } catch (err) { pushState.msg = err.message; }
+      rerender();
+    }, t);
+  } else if (t.dataset.pushTest) {
+    act(async () => { await api("/api/push/test", {}); pushState.msg = "Test sent."; rerender(); }, t);
   } else if (t.dataset.webDiscord) {
     const on = t.dataset.webDiscord === "true";
     act(async () => {

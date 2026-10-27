@@ -12,7 +12,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from . import config, models
+from . import config, models, push
 from .activity import ActivityRelay
 from .format import ATTACHED, fmt_duration, short, tables_to_code, tool_full, tool_line, tool_result_text, truncate
 from .runner import CodexRun, Run, make_run
@@ -168,7 +168,8 @@ class AgentBot(discord.Client):
             feed = self.feeds[thread.id] = Feed(thread)
         return feed
 
-    async def alert(self, head: str, body: str = "") -> None:
+    async def alert(self, head: str, body: str = "", url: str = "/") -> None:
+        push.notify_soon(re.sub(r"\s*·\s*https?://\S+", "", head), body.strip(), url)
         text = f"{self.owner_mention} {head}"
         if body.strip():
             text += "\n>>> " + truncate(body.strip(), 400)
@@ -182,6 +183,9 @@ class AgentBot(discord.Client):
         agent = self.state.agents.get(int(thread_id)) if thread_id else None
         if agent is not None:
             record_sent(agent.thread_id, files, message)   # the dashboard shows it from here
+        if alert:
+            push.notify_soon(agent.title if agent else "agentd", message or ", ".join(Path(f).name for f in files),
+                             f"/agents/{agent.thread_id}" if agent else "/")
         if agent is not None and not agent.discord:
             return  # no thread to post to; the dashboard shows files sent with agentd-send
         if self.ch_alerts is None:
@@ -369,10 +373,13 @@ class AgentBot(discord.Client):
             # Agent threads ping in place; #alerts is for things that have no thread of their own.
             await feed.send(f"{self.owner_mention} ✅ done · {fmt_duration(duration_ms / 1000)}"
                             f" · {turns} turns", silent=False)
+            push.notify_soon(f"✅ {agent.title}", (result.get("result") or "").strip(),
+                             f"/agents/{agent.thread_id}", tag=str(agent.thread_id))
         else:
             agent.status = "error"
             detail = (result or {}).get("result") or err.strip() or f"{'codex' if isinstance(run, CodexRun) else 'claude'} exited with code {rc}"
             await react(trigger, "❌")
+            push.notify_soon(f"❌ {agent.title}", detail.strip(), f"/agents/{agent.thread_id}", tag=str(agent.thread_id))
             await feed.send(f"{self.owner_mention} ❌ **Run failed**\n```\n"
                             f"{truncate(detail, 1500).replace('```', 'ˋˋˋ')}\n```", silent=False)
         agent.updated = time.time()

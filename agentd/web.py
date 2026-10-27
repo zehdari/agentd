@@ -20,7 +20,7 @@ from pathlib import Path
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
-from . import config, models
+from . import config, models, push
 from .format import ATTACHED, short, split_attached
 
 log = logging.getLogger(__name__)
@@ -1216,6 +1216,30 @@ def make_app(bot) -> web.Application:
             bot.state.save()
         return web.json_response(bot.state.settings)
 
+    async def push_key(request):
+        return web.json_response({"key": push.public_key(), "devices": push.count()})
+
+    async def push_subscribe(request):
+        data = await body(request)
+        try:
+            push.subscribe(data.get("sub") or {}, request.headers.get("User-Agent", ""))
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response({"ok": True, "devices": push.count()})
+
+    async def push_unsubscribe(request):
+        push.unsubscribe((await body(request)).get("endpoint", ""))
+        return web.json_response({"ok": True, "devices": push.count()})
+
+    async def push_test(request):
+        await push.notify("🔔 agentd", "Test notification from Cam-PC.", "/settings", tag="test")
+        return web.json_response({"ok": True})
+
+    async def service_worker(request):
+        resp = web.FileResponse(STATIC / "sw.js")
+        resp.headers["Service-Worker-Allowed"] = "/"
+        return resp
+
     async def refresh_usage(request):
         error, _ = await asyncio.gather(dash.refresh_usage(), dash.refresh_codex())
         return web.json_response({"ok": error is None, "error": error})
@@ -1376,6 +1400,9 @@ def make_app(bot) -> web.Application:
         web.post("/api/agents/{id}/seen", seen), web.post("/api/jobs/{unit}/stop", stop_job),
         web.get("/api/gpu", gpu), web.post("/api/gpu", gpu_switch),
         web.post("/api/usage/refresh", refresh_usage), web.post("/api/settings", settings),
+        web.get("/api/push/key", push_key), web.post("/api/push/subscribe", push_subscribe),
+        web.post("/api/push/unsubscribe", push_unsubscribe), web.post("/api/push/test", push_test),
+        web.get("/sw.js", service_worker),
         web.static("/static", STATIC),
     ])
 
