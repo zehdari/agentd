@@ -264,6 +264,9 @@ class AgentLog:
         self.rate: tuple[float, dict] | None = None   # latest plan-limit reading (rate_limit_event)
         self.costs: list[list] = []                   # [time, API-equivalent $] per result
         self.subagents: dict[str, dict] = {}          # Agent tool_use id -> what it's doing (Details → Subagents)
+        self.tokens: dict[str, dict] = {}             # model -> token totals for this chat, subagents included
+        self._tok_last: dict[str, dict] = {}          # the last running totals the CLI reported, per model
+        self.context: tuple[int, int] | None = None   # (tokens in the latest request, the model's context window)
         self._last_cost = 0.0
         self._new_run = True
 
@@ -327,6 +330,32 @@ class AgentLog:
             self.segs[-1][1] = t
         return t
 
+    def _count_tokens(self, ev: dict) -> None:
+        """Add a run's tokens. Claude Code (modelUsage, per model) and Codex (usage) both report running
+        totals for the session, so count what they grew by; a total that went down is a new session."""
+        if ev.get("modelUsage"):
+            reports = {m: {"in": u.get("inputTokens", 0), "cache_read": u.get("cacheReadInputTokens", 0),
+                           "cache_write": u.get("cacheCreationInputTokens", 0), "out": u.get("outputTokens", 0),
+                           "reasoning": u.get("thinkingTokens", 0)} for m, u in ev["modelUsage"].items()}
+            main = ev["modelUsage"].get(self.model or "") or {}
+            if main.get("contextWindow") and self.context:
+                self.context = (self.context[0], main["contextWindow"])
+        elif ev.get("usage") and models.is_codex(self.model):
+            u = ev["usage"]
+            cached = u.get("cached_input_tokens") or 0
+            reports = {self.model: {"in": (u.get("input_tokens") or 0) - cached, "cache_read": cached,
+                                    "cache_write": u.get("cache_write_input_tokens") or 0,
+                                    "out": u.get("output_tokens") or 0, "reasoning": u.get("reasoning_output_tokens") or 0}}
+        else:
+            return
+        for model, cur in reports.items():
+            last = self._tok_last.get(model)
+            grew = last is not None and all(cur[k] >= last.get(k, 0) for k in cur)
+            total = self.tokens.setdefault(model, dict.fromkeys(cur, 0))
+            for k, v in cur.items():
+                total[k] += v - last[k] if grew else v
+            self._tok_last[model] = cur
+
     def _subagent_task(self, ev: dict) -> None:
         """Claude Code's task events: a subagent's progress, and its status and report when it ends."""
         sub = self.subagents.get(ev.get("tool_use_id") or "") or next(
@@ -383,6 +412,11 @@ class AgentLog:
         if kind == "assistant":
             t = self._at(parse_ts(ev.get("timestamp")))
             nested = ev.get("parent_tool_use_id") is not None
+            usage = ev.get("message", {}).get("usage")
+            if usage and not nested:
+                used = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+                if used:
+                    self.context = (used, self.context[1] if self.context else 0)
             for block in ev.get("message", {}).get("content", []) or []:
                 btype = block.get("type")
                 if btype == "text" and block.get("text", "").strip() and not nested:
@@ -441,6 +475,7 @@ class AgentLog:
                     sub["summary"] = short(text_of(res.get("content")) or text_of(block.get("content")), 1500)
             return
         if kind == "result":
+            self._count_tokens(ev)
             cost = ev.get("total_cost_usd")
             if cost is not None:   # a running total for the whole session, even across --resume
                 delta = cost - self._last_cost if cost >= self._last_cost else cost
@@ -927,6 +962,9 @@ class Dashboard:
             "jobs": jobs, "file_list": files, "efforts": models.efforts_for(agent.model),
             "subagents": [{**sub, "model_label": models.label(sub["model"]) if sub["model"] else ""}
                           for sub in al.subagents.values()],
+            "tokens": [{"model": models.label(m), **t} for m, t in
+                       sorted(al.tokens.items(), key=lambda kv: -sum(kv[1].values()))],
+            "context": al.context,
             # the title is cut to 90 characters; the Details panel shows the whole first message
             "prompt": short(next((e["text"] for e in al.entries if e["kind"] == "you" and e["text"]), agent.title), 1000),
             "parent": ({"id": str(agent.parent), "title": parent.title}

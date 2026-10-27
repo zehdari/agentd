@@ -1140,6 +1140,26 @@ function renderDetails(d) {
   } else box.innerHTML = detailsHtml(d);
 }
 
+// Tokens: 950, 12.4k, 3.1M
+function tok(n) {
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}k`;
+  return `${+(n / 1e6).toFixed(n < 1e7 ? 2 : 1)}M`;
+}
+function tokensHtml(d) {
+  const rows = d.tokens || [];
+  if (!rows.length && !d.context) return "";
+  const line = t => {
+    const input = t.in + t.cache_read + t.cache_write;
+    const cached = input ? Math.round(t.cache_read / input * 100) : 0;
+    return `${tok(input)} in${cached ? ` (${cached}% cached)` : ""} · ${tok(t.out)} out${t.reasoning ? ` (${tok(t.reasoning)} thinking)` : ""}`;
+  };
+  const total = rows.reduce((a, t) => a + t.in + t.cache_read + t.cache_write + t.out, 0);
+  const ctx = d.context && d.context[0] ? `<dt>Context</dt><dd>${tok(d.context[0])}${d.context[1] ? ` of ${tok(d.context[1])} · ${Math.round(d.context[0] / d.context[1] * 100)}%` : ""}</dd>` : "";
+  return `${rows.length ? `<dt>Tokens</dt><dd><b>${tok(total)}</b> total${rows.map(t =>
+    `<span class="tok-line">${rows.length > 1 ? `${esc(t.model)}: ` : ""}${line(t)}</span>`).join("")}</dd>` : ""}${ctx}`;
+}
+
 function detailsHtml(d) {
   const effortSel = `<label class="select"><span>Effort</span><select id="effort">${["default", ...d.efforts].map(e =>
     `<option value="${esc(e)}"${(d.effort || "default") === e ? " selected" : ""}>${esc(e === "default" ? withDefault(e, d.default_effort) : e)}</option>`).join("")}</select></label>`;
@@ -1155,6 +1175,7 @@ function detailsHtml(d) {
         ${d.parent ? `<dt>Edited from</dt><dd><a href="/agents/${esc(d.parent.id)}">${esc(d.parent.title)}</a></dd>` : ""}
         <dt>Turns</dt><dd>${d.turns} · ${d.tool_count} tool calls</dd>
         ${mix ? `<dt>Tools</dt><dd>${mix}</dd>` : ""}
+        ${tokensHtml(d)}
       </dl>
       <div class="d-actions">${effortSel}
         ${d.url ? `<a class="btn" href="${esc(d.url)}" target="_blank" rel="noopener">${icon("ext")}<span>Discord thread</span></a>` : ""}
