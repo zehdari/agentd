@@ -1307,7 +1307,10 @@ addEventListener("touchcancel", endPull);
 // Switch pages without reloading: draw from cache straight away, then fetch fresh data.
 function navigate(url, push = true) {
   if (push) history.pushState({}, "", url);
+  const prev = AGENT_ID;
   parseRoute();
+  // Where Details covers the chat (phones, narrow windows), opening a chat again shows the chat, not Details.
+  if (AGENT_ID !== prev && matchMedia("(max-width: 1240px)").matches) ui.details = false;
   ui.firstDetail = true;
   ui.convoKey = "";
   ui.confirm = null;
