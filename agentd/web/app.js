@@ -99,6 +99,8 @@ const voicePlayed = new Set();
 let voiceSince = null, voiceUnlocked = false;
 const voiceAuto = () => localStorage.getItem("agentd-voice-auto") !== "off";
 const SILENCE = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+// iOS 17+: "ambient" mixes with other apps' audio instead of pausing it; "auto" is normal playback.
+const audioMode = t => { try { if (navigator.audioSession) navigator.audioSession.type = t; } catch {} };
 
 function voiceTile(src, name) {
   return `<div class="voice" data-src="${esc(src)}">
@@ -114,12 +116,13 @@ const playerSrc = () => player.src ? new URL(player.src).pathname + new URL(play
 function toggleVoice(src, from = null) {
   voiceUnlocked = true;
   if (playerSrc() === src && !player.ended) {
-    if (player.paused) player.play().catch(() => {}); else player.pause();
+    if (player.paused) { audioMode("auto"); player.play().catch(() => {}); } else player.pause();
     return;
   }
   player.src = src;
   if (from != null) player.currentTime = from;
   voicePlayed.add(src);
+  audioMode("auto");
   player.play().catch(() => {});
 }
 
@@ -164,6 +167,7 @@ function autoplayNew(now, items) {
   if (!player.paused && !player.ended) return;   // don't talk over a message that is already playing
   const last = fresh[fresh.length - 1];
   player.src = fileUrl(last.p);
+  audioMode("auto");
   player.play().catch(() => {});
 }
 
@@ -179,10 +183,13 @@ document.addEventListener("click", e => {
 });
 
 // iOS only lets a page start audio by itself if that element has played during a tap before.
+// The silent clip plays as "ambient" so it doesn't stop music from other apps. Without the
+// audioSession API (older iOS) it would, so skip it there; other browsers don't need it.
 document.addEventListener("pointerdown", () => {
-  if (voiceUnlocked) return;
+  if (voiceUnlocked || !navigator.audioSession) return;
   voiceUnlocked = true;
   if (player.src) return;
+  audioMode("ambient");
   player.src = SILENCE;
   player.play().then(() => player.pause()).catch(() => {});
 }, { capture: true });
