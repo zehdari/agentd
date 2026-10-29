@@ -20,6 +20,19 @@ function scroller() {
   return s && getComputedStyle(s).overflowY === "auto" ? s : document.scrollingElement;
 }
 const toBottom = () => { const s = scroller(); s.scrollTop = s.scrollHeight; };
+// A redraw replaces every element, so the browser can't hold the reader's place when something above
+// them grows or shrinks (a chat joining the waiting band, a list reordering). Pin the first keyed row
+// on screen to where it was. At the very top there's no place to keep: new things up there should show.
+function keepPlace(render) {
+  const sc = scroller(), top = sc === document.scrollingElement ? 0 : sc.getBoundingClientRect().top;
+  const els = sc.scrollTop > 0 ? [...document.querySelectorAll("#view [data-k], #view section[id]")] : [];
+  const el = els.find(e => e.getBoundingClientRect().top >= top) || els.findLast(e => e.getBoundingClientRect().top < top);
+  const k = el && (el.dataset.k ? `[data-k="${CSS.escape(el.dataset.k)}"]` : `section#${CSS.escape(el.id)}`);
+  const y = el && el.getBoundingClientRect().top;
+  render();
+  const now = k && document.querySelector(`#view ${k}`);
+  if (now) sc.scrollTop += now.getBoundingClientRect().top - y;
+}
 // So the arrow keys, Page Down and space scroll the column before anything has been clicked.
 function focusScroller() {
   const s = scroller();
@@ -539,7 +552,7 @@ function renderNewAgent() {
 function waitingBand(d) {
   const agents = d.agents.filter(a => a.status === "waiting");
   const items = [
-    ...agents.map(a => ({ t: a.updated, html: `<li>
+    ...agents.map(a => ({ t: a.updated, html: `<li data-k="w:${a.id}">
       <span class="w-mark" aria-hidden="true"></span>
       <div class="w-body">
         <a class="w-title" href="/agents/${a.id}">${esc(a.title)}</a>
@@ -549,7 +562,7 @@ function waitingBand(d) {
       <div class="w-act"><a class="btn" href="/agents/${a.id}#reply">${icon("reply")}<span>Reply</span></a>
         <button class="icon-btn" type="button" data-seen="${a.id}" aria-label="Mark as read" title="Mark as read">${icon("check")}</button></div>
     </li>` })),
-    ...d.pending.map(p => ({ t: p.t, html: `<li>
+    ...d.pending.map(p => ({ t: p.t, html: `<li data-k="p:${p.t}">
       <span class="w-mark" aria-hidden="true"></span>
       <div class="w-body">
         <span class="w-title">Session needs permission</span>
@@ -590,7 +603,7 @@ function agentRow(a, d) {
   const doing = st === "running" && a.now_doing
     ? `<span class="doing">${icon("term", "i i-sm")}<code>${esc(a.now_doing)}</code></span>` : "";
   const queued = a.queued ? ` · ${a.queued} queued` : "";
-  return `<tr class="row-${st}${ui.confirm === `delete:${a.id}` ? " confirming" : ""}">
+  return `<tr data-k="a:${a.id}" class="row-${st}${ui.confirm === `delete:${a.id}` ? " confirming" : ""}">
     <td class="c-state">${stateChip(st)}</td>
     <td class="c-task"><a href="/agents/${a.id}" class="task">${esc(a.title)}</a>
       <span class="sub"><code>${esc(a.cwd)}</code><span>${esc(a.model_label || a.model || "default")}${effort}</span><span class="when">${esc(time)}${queued}</span></span>${doing}</td>
@@ -663,7 +676,7 @@ function jobRow(j, now, own = false) {
     ? (ui.confirm === key ? `<button class="btn danger sm" type="button" data-stopjob="${esc(j.unit)}">Stop?</button>`
       : `<button class="icon-btn danger" type="button" data-arm="${esc(key)}" aria-label="Stop job" title="Stop">${icon("stop")}</button>`)
     : "";
-  return `<li class="${j.active ? "" : "is-past"}"><span class="state state-${j.active ? "running" : "done"}"><i></i></span>
+  return `<li data-k="${esc(key)}" class="${j.active ? "" : "is-past"}"><span class="state state-${j.active ? "running" : "done"}"><i></i></span>
     <div><code class="unit">${esc(j.unit)}</code><span class="sub">${from}${state}${ended}</span></div>${act}</li>`;
 }
 
@@ -678,7 +691,7 @@ function jobsSection(jobs, now) {
 function fileItem(f, withAgent = true) {
   const name = f.exists ? `<a class="fname" href="${fileUrl(f.path)}" data-view="${f.image ? "image" : "file"}" data-name="${esc(f.name)}">${esc(f.name)}</a>` : `<span class="fname gone">${esc(f.name)}</span>`;
   const meta = [withAgent ? `<a href="/agents/${f.agent}">${esc(f.agent_title)}</a>` : "", esc(when(f.t)), f.exists ? size(f.size) : "deleted"].filter(Boolean).join(" · ");
-  return `<li>${icon(f.image ? "image" : "files", "i ft")}<div>${name}<span class="sub">${meta}</span></div></li>`;
+  return `<li data-k="f:${esc(f.path)}">${icon(f.image ? "image" : "files", "i ft")}<div>${name}<span class="sub">${meta}</span></div></li>`;
 }
 
 function filesSection(files) {
@@ -1277,6 +1290,16 @@ function mergeDetail(prev, d) {
   return d;
 }
 
+// Wait for the reader's finger and any fling to stop. Safari on iOS carries a fling on from where it
+// was, overriding a scroll position set meanwhile, which would land them far up in the older page.
+const scrolling = { at: 0, touches: 0 };
+document.addEventListener("scroll", () => { scrolling.at = Date.now(); }, { passive: true, capture: true });
+addEventListener("touchstart", e => { scrolling.touches = e.touches.length; }, { passive: true });
+for (const ev of ["touchend", "touchcancel"]) addEventListener(ev, e => { scrolling.touches = e.touches.length; }, { passive: true });
+async function scrollIdle() {
+  while (scrolling.touches || Date.now() - scrolling.at < 150) await new Promise(r => setTimeout(r, 50));
+}
+
 // Older entries load only when the reader scrolls up near the top (or taps the button), a page at a time.
 async function loadOlder() {
   const id = AGENT_ID, d = cache.agents[id];
@@ -1291,6 +1314,7 @@ async function loadOlder() {
       cache.agents[id] = { ...cur, entries_from: r.entries_from, entries: r.entries.concat(cur.entries) };
     }
   } catch { /* the button stays; try again on the next scroll or tap */ }
+  await scrollIdle();
   ui.loadingOlder = false;
   if (AGENT_ID !== id || !cache.agents[id]) return;
   const sc = scroller(), fromBottom = sc.scrollHeight - sc.scrollTop;   // keep the reader's place
@@ -1332,7 +1356,7 @@ async function refresh(manual = false) {
       renderShell(d);
       const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)
         && $("#view").contains(document.activeElement);
-      if (!typing) SYSTEM ? renderSystem(d) : SECTION ? renderSection(d) : renderOverview(d);
+      if (!typing) keepPlace(() => SYSTEM ? renderSystem(d) : SECTION ? renderSection(d) : renderOverview(d));
       if (SYSTEM || SECTION) document.title = `${SYSTEM ? "System" : SECTION_TITLES[SECTION]} · ${d.machine.host}`;
       if (!ui.scrolledToHash && location.hash.length > 1) {   // content didn't exist when the browser tried
         ui.scrolledToHash = true;
@@ -1489,7 +1513,7 @@ document.addEventListener("pointerdown", e => {
 
 function rerender() {
   if (!ui.data) return;
-  AGENT_ID ? renderDetail(ui.data) : SYSTEM ? renderSystem(ui.data) : SECTION ? renderSection(ui.data) : renderOverview(ui.data);
+  AGENT_ID ? renderDetail(ui.data) : keepPlace(() => SYSTEM ? renderSystem(ui.data) : SECTION ? renderSection(ui.data) : renderOverview(ui.data));
 }
 
 // ------------------------------------------------------------------ actions
