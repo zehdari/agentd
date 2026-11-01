@@ -646,6 +646,10 @@ pre.code code { background: none; padding: 0; }
 .tools-now code { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--channel); }
 .tools-row.live .tools-sum { color: var(--channel); }
 .tools-row .calls { margin: 0 0 4px 18px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--rule-soft); border-radius: var(--r); }
+.stall { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 10px 12px;
+  border: 1px solid var(--danger-rule); border-radius: var(--r); background: var(--danger-tint); }
+.stall p { margin: 0; color: var(--red); font-weight: 550; font-size: 14px; }
+.stall-actions { display: flex; gap: 8px; }
 .chat-error { margin: 0; padding: 8px 12px; border-radius: var(--r); background: var(--danger-tint); color: var(--red); font-weight: 550; }
 .working { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--channel); font-size: 13px; font-weight: 550; }
 .dots { display: inline-flex; gap: 4px; }
@@ -947,3 +951,48 @@ body.pull-settle:not(.p-chat) .main > :not(.topbar) { transition: transform .35s
 .sub-chat .bubble.clamped { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
 .sub-chat .bubble-row > .btn { align-self: flex-end; margin-top: 4px; }
 .tok-line { display: block; white-space: normal; overflow-wrap: anywhere; color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+
+/* voice: dictation mic in the message box, and voice mode */
+.mic-btn {
+  width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 50%; border: 0;
+  background: none; color: var(--ink-2); cursor: pointer; position: relative;
+}
+.mic-btn:hover { background: var(--rule-soft); color: var(--ink); }
+.mic-btn.rec { color: #fff; background: var(--red); box-shadow: 0 0 0 calc(var(--lvl, 0) * 8px + 2px) var(--danger-rule); transition: box-shadow .08s linear; }
+.mic-btn.busy { color: var(--ink-3); animation: vm-breathe 1.2s ease-in-out infinite; }
+.said { display: inline-flex; align-items: center; gap: 3px; }
+
+.vm {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; background: var(--deep); color: var(--ink);
+  padding: max(14px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+}
+.vm[hidden] { display: none; }
+body.vm-open { overflow: hidden; }
+.vm-top { display: flex; align-items: center; gap: 12px; min-height: 40px; }
+.vm-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-weight: 600; }
+.vm-close { width: 40px; height: 40px; }
+.vm-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 0; }
+.vm-orb {
+  --lvl: 0; width: 200px; height: 200px; border: 0; padding: 0; border-radius: 50%; background: none; cursor: pointer;
+  display: grid; place-items: center; -webkit-tap-highlight-color: transparent; margin-bottom: 18px;
+}
+.vm-core {
+  width: 150px; height: 150px; border-radius: 50%; background: var(--channel);
+  transform: scale(calc(.82 + var(--lvl) * .3)); transition: transform .09s linear, background-color .3s var(--ease), opacity .3s;
+}
+.vm[data-state="listening"] .vm-core { box-shadow: 0 0 0 calc(var(--lvl) * 26px) var(--channel-a); }
+.vm[data-state="transcribing"] .vm-core, .vm[data-state="waiting"] .vm-core { background: var(--ink-3); animation: vm-breathe 1.6s ease-in-out infinite; }
+.vm[data-state="speaking"] .vm-core { background: var(--primary); animation: vm-talk .9s ease-in-out infinite; }
+.vm[data-state="paused"] .vm-core { background: transparent; border: 3px solid var(--rule-strong); transform: scale(.82); }
+@keyframes vm-breathe { 50% { transform: scale(.74); opacity: .6; } }
+@keyframes vm-talk { 0%, 100% { transform: scale(.86); } 50% { transform: scale(.96); } }
+.vm-state { margin: 0; font-size: 22px; font-weight: 650; }
+.vm-sub { margin: 0; min-height: 1.4em; max-width: 34ch; color: var(--ink-3); font-size: 14px; text-align: center; overflow-wrap: anywhere; }
+.vm-captions { display: flex; flex-direction: column; gap: 10px; max-width: 560px; width: 100%; margin: 0 auto 14px; max-height: 34vh; overflow-y: auto; }
+.vm-captions p { margin: 0; }
+.vm-captions p:empty { display: none; }
+.vm-you { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 16px 16px 4px 16px; background: var(--bubble); color: var(--bubble-ink); font-size: 15px; }
+.vm-reply { color: var(--ink-2); font-size: 15px; line-height: 1.5; }
+.vm-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 560px; width: 100%; margin: 0 auto; }
+.vm-fast { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .vm-core, .mic-btn.busy { animation: none !important; } }

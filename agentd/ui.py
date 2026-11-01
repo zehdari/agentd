@@ -73,6 +73,36 @@ class FullView(discord.ui.View):
                                           view=FullView(not expanded))
 
 
+class StallView(discord.ui.View):
+    """Stop / Retry under the watchdog's "it may be stuck" message. Persistent; the thread is the agent."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _act(self, inter: discord.Interaction, retry: bool) -> None:
+        bot = inter.client
+        if inter.user.id not in getattr(bot, "owner_ids", ()):
+            await inter.response.send_message("Not authorized.", ephemeral=True)
+            return
+        if inter.channel_id not in bot.runs:
+            await inter.response.send_message("It isn't running any more.", ephemeral=True)
+            return
+        if retry:
+            bot.retry_agent(inter.channel_id)
+        else:
+            bot.stop_agent(inter.channel_id)
+        await inter.response.edit_message(view=None)
+        await inter.followup.send("🔁 Restarting the turn…" if retry else "⏹️ Stopping…")
+
+    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.secondary, custom_id="agentd:stall-stop")
+    async def stop(self, inter: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._act(inter, False)
+
+    @discord.ui.button(label="Retry", emoji="🔁", style=discord.ButtonStyle.primary, custom_id="agentd:stall-retry")
+    async def retry(self, inter: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._act(inter, True)
+
+
 class Feed:
     """Tool calls collect into one message that is edited in place (at most every
     EDIT_INTERVAL seconds); text is posted as new messages, so order is preserved."""

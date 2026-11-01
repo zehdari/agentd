@@ -32,6 +32,12 @@ class Run:
         self.closed = False
         self.idle = False  # between turns
         self.bg_tasks = 0  # background tasks (e.g. Bash with run_in_background) still going
+        # Watchdog: when the last event came, whether that left it waiting on the model or a tool call,
+        # and last_event as it was when the run was flagged as stuck (None while it isn't).
+        self.last_event = time.time()
+        self.waiting = "model"
+        self.stalled_at: float | None = None
+        self.retry = False   # stopped by Retry: send it a nudge to carry on once it has exited
         self._stderr_task: asyncio.Task | None = None
         self.log_path = config.STATE_DIR / "logs" / f"{agent.thread_id}.jsonl"
 
@@ -115,6 +121,12 @@ class Run:
                 except json.JSONDecodeError:
                     continue
                 kind, sub = ev.get("type"), ev.get("subtype")
+                self.last_event = time.time()
+                if kind == "assistant":
+                    blocks = ev.get("message", {}).get("content") or [{}]
+                    self.waiting = "tool" if blocks[-1].get("type") == "tool_use" else "model"
+                elif kind == "user" or (kind == "system" and sub == "init"):
+                    self.waiting = "model"
                 if kind == "result":
                     self.idle = True
                 elif kind == "system" and sub == "init":
@@ -131,6 +143,9 @@ class Run:
         if self._stderr_task:
             await self._stderr_task
         return rc, "".join(self.stderr)
+
+    def stall_limit(self) -> float:
+        return config.STALL_TOOL if self.waiting == "tool" else config.STALL_MODEL
 
     def stop(self) -> None:
         self.stopped = self.closed = True
@@ -302,6 +317,11 @@ class CodexRun(Run):
                     ev = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                self.last_event = time.time()
+                if ev.get("type") in ("item.started", "item.completed"):
+                    busy = ev["type"] == "item.started" and (ev.get("item") or {}).get("type") in (
+                        "command_execution", "mcp_tool_call", "web_search", "file_change")
+                    self.waiting = "tool" if busy else "model"
                 for out in self._translate(ev):
                     ended = ended or out["type"] == "result"
                     log.write(json.dumps(out).encode() + b"\n")

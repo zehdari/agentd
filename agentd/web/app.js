@@ -13,7 +13,7 @@ function parseRoute() {
   SECTION = s ? s[1] : null;
 }
 parseRoute();
-const pollMs = () => (AGENT_ID ? 2500 : 4000);
+const pollMs = () => (AGENT_ID ? (window.voiceActive?.() ? 1000 : 2500) : 4000);   // voice mode answers quickly
 // What scrolls: the middle column on desktop (so the rail and top bar stay put), the page on the phone.
 function scroller() {
   const s = document.getElementById("scroll");
@@ -173,6 +173,7 @@ function probeVoice(src) {
 // Anything sent before the page loaded doesn't.
 function autoplayNew(now, items) {
   if (voiceSince === null) { voiceSince = now; return; }
+  if (window.voiceActive?.()) return;   // voice mode does the talking
   const fresh = items.filter(i => AUDIO_RE.test(i.p) && i.t > voiceSince && !voicePlayed.has(fileUrl(i.p)));
   if (!fresh.length || !voiceAuto() || document.hidden) return;
   fresh.sort((a, b) => a.t - b.t);
@@ -252,6 +253,7 @@ function renderChips() {
   if (c) { c.innerHTML = chipsHtml(ui.attach, "attach"); c.hidden = !ui.attach.length; }
   const n = $("#new-chips");
   if (n) { n.innerHTML = chipsHtml(ui.newFiles, "newFiles"); n.hidden = !ui.newFiles.length; }
+  window.syncSend?.();
 }
 function addFiles(list, files) {
   // Pasted screenshots all arrive as "image.png"; give them distinct names.
@@ -287,6 +289,8 @@ function fileTiles(paths, exists) {
 
 const ICONS = {
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
+  talk: '<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/>',
   fork: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v1a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 11v6"/>',
   clip: '<path d="m20 11.5-7.8 7.8a5 5 0 0 1-7.1-7.1l8-8a3.3 3.3 0 0 1 4.7 4.7l-7.9 7.9a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3"/>',
   agents: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
@@ -543,7 +547,7 @@ function renderNewAgent() {
       <label class="field"><span>Effort</span><select name="effort">${effortOptions("")}</select></label>
     </div>
     <p class="form-error" id="new-error" role="alert" hidden></p>
-    <div class="new-actions"><button class="btn primary" type="submit">${icon("send")}<span>Start agent</span></button><button class="btn" type="button" id="new-cancel">Cancel</button><span class="hint">${webToDiscord() ? "It gets its own thread in #agents too." : "Stays on the dashboard (not posted to Discord)."}</span></div>
+    <div class="new-actions"><button class="btn primary" type="submit">${icon("send")}<span>Start agent</span></button><button class="btn" type="button" id="new-talk">${icon("talk")}<span>Talk instead</span></button><button class="btn" type="button" id="new-cancel">Cancel</button><span class="hint">${webToDiscord() ? "It gets its own thread in #agents too." : "Stays on the dashboard (not posted to Discord)."}</span></div>
   </form>`;
   $("textarea", box).focus();
 }
@@ -1053,7 +1057,8 @@ function convoHtml(d) {
             <button class="btn sm primary" type="submit">Start new chat</button></div></form>`);
         continue;
       }
-      const note = e.steer ? `<p class="bubble-note">sent while it was working</p>` : "";
+      const bits = [e.voice ? `<span class="said">${icon("mic", "i i-sm")}said aloud</span>` : "", e.steer ? "sent while it was working" : ""].filter(Boolean);
+      const note = bits.length ? `<p class="bubble-note">${bits.join(" · ")}</p>` : "";
       const edit = key ? `<button class="bubble-edit" type="button" data-edit="${esc(key)}" title="Edit into a new chat">${icon("edit", "i i-sm")}<span>Edit</span></button>` : "";
       out.push(`<div class="bubble-row">${files}
         ${e.text ? `<div class="bubble"><div class="md">${md(e.text)}</div></div>` : ""}
@@ -1088,6 +1093,10 @@ function convoHtml(d) {
   }
   if (d.status === "running") {
     out.push(`<p class="working"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working · <span class="work-t" data-start="${d.started}">${dur(d.now - d.started)}</span>${d.queued ? ` · ${d.queued} message${d.queued > 1 ? "s" : ""} queued` : ""}</p>`);
+  }
+  if (d.stalled) {
+    out.push(`<div class="stall" role="alert"><p>${d.stalled.waiting === "tool" ? "A tool call hasn’t finished" : "No reply from the model"} for <span class="work-t" data-start="${d.stalled.since}">${dur(d.now - d.stalled.since)}</span>. It may be stuck.</p>
+      <div class="stall-actions"><button class="btn sm" type="button" data-stop="${d.id}">Stop</button><button class="btn sm primary" type="button" data-retry="${d.id}">Retry</button></div></div>`);
   }
   if (d.entries_from > 0) {
     out.unshift(`<button class="convo-more" type="button" data-older${ui.loadingOlder ? " disabled" : ""}>${ui.loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}</button>`);
@@ -1254,6 +1263,7 @@ function renderDetail(d) {
             <button class="attach-btn" type="button" id="attach-btn" aria-label="Attach files" title="Attach files">${icon("clip")}</button>
             <input type="file" id="attach-input" multiple hidden>
             <textarea id="m" rows="1" placeholder="Reply to Claude"></textarea>
+            <button class="mic-btn" type="button" id="mic-btn" aria-label="Dictate" title="Dictate">${icon("mic")}</button>
             <button class="send" type="submit" aria-label="Send">${icon("send")}</button></form>
         </section>
         <aside class="details" id="details"></aside>
@@ -1266,6 +1276,7 @@ function renderDetail(d) {
     if (draft) { $("#m").value = draft; fitComposer($("#m")); }
   }
   $("#m").placeholder = d.provider === "codex" ? "Reply to ChatGPT" : "Reply to Claude";
+  window.syncSend?.();
   const stop = d.status === "running"
     ? (ui.confirm === `stop:${d.id}` ? `<button class="btn danger sm" type="button" data-stop="${d.id}">${icon("stop")}<span>Stop now?</span></button>`
       : `<button class="btn danger sm" type="button" data-arm="stop:${d.id}" aria-label="Stop">${icon("stop")}<span>Stop</span></button>`) : "";
@@ -1276,7 +1287,7 @@ function renderDetail(d) {
   document.body.classList.toggle("details-open", ui.details);
 
   const outKey = (d.outbox || []).map(m => m.state).join(",") + "|" + ui.sending.map(s => Math.floor(s.pct * 100)).join(",");
-  const key = `${d.entries_from}:${ui.loadingOlder}:${d.total_entries}:${d.status}:${d.queued}:${outKey}:${[...ui.expanded].join(",")}:${d.started}`;
+  const key = `${d.entries_from}:${ui.loadingOlder}:${d.total_entries}:${d.status}:${d.queued}:${outKey}:${[...ui.expanded].join(",")}:${d.started}:${d.stalled ? d.stalled.since : ""}`;
   if (key !== ui.convoKey && !(ui.editing && $("#edit-text"))) {   // don't redraw under a message being edited
     const sc = scroller(), nearBottom = sc.clientHeight + sc.scrollTop > sc.scrollHeight - 240;
     ui.convoKey = key;
@@ -1293,8 +1304,7 @@ function renderDetail(d) {
 
 // The "Working · 12 s" timer counts on its own between polls, on the server's clock.
 function tickWorking() {
-  const el = $(".work-t");
-  if (el) el.textContent = dur(Date.now() / 1000 + (ui.skew || 0) - Number(el.dataset.start));
+  for (const el of document.querySelectorAll(".work-t")) el.textContent = dur(Date.now() / 1000 + (ui.skew || 0) - Number(el.dataset.start));
 }
 setInterval(tickWorking, 1000);
 
@@ -1363,6 +1373,7 @@ async function refresh(manual = false) {
       ui.data = d;
       document.title = `${d.title.slice(0, 48)} · agentd`;
       renderDetail(d);
+      window.voiceUpdate?.(d);
       if (d.status === "waiting" && !document.hidden) api(`/api/agents/${id}/seen`, {}).catch(() => {});
     } else {
       const d = await api("/api/overview");
@@ -1623,6 +1634,7 @@ document.addEventListener("click", e => {
     rerender();
   } else if (t.dataset.arm) arm(t.dataset.arm);
   else if (t.dataset.stop) act(() => api(`/api/agents/${t.dataset.stop}/stop`, {}), t);
+  else if (t.dataset.retry) act(() => api(`/api/agents/${t.dataset.retry}/retry`, {}), t);
   else if (t.dataset.delete) deleteAgent(t.dataset.delete, t);
   else if (t.dataset.stopjob) act(() => api(`/api/jobs/${encodeURIComponent(t.dataset.stopjob)}/stop`, {}), t);
   else if (t.dataset.seen) act(() => api(`/api/agents/${t.dataset.seen}/seen`, {}), t);

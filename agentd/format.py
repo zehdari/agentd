@@ -186,7 +186,28 @@ ATTACHED = "[The user attached these files: "
 _ATTACHED_RE = re.compile(r"^" + re.escape(ATTACHED) + r"(.*)\]$", re.M)
 
 
+# Added to what you say in the dashboard's voice mode, so the agent answers in a way that sounds right read aloud.
+VOICE_NOTE = (
+    "[Voice mode: the user is talking to you out loud, and your reply will be read to them by text-to-speech. "
+    "Their message was transcribed from speech, so it may have small transcription errors: go with the obvious meaning. "
+    "Reply the way you'd say it in conversation: plain spoken sentences, short (a few sentences unless they ask for more). "
+    "No markdown, lists, headings, tables, code, emoji, URLs or file paths, which sound wrong read aloud: describe them "
+    "in words, and offer to send exact text, code or files with agentd-send if they'd need them. Say numbers, units and "
+    "symbols the way you'd speak them. Before tool calls, say a few words or nothing. Don't call agentd-say: your reply "
+    "is already spoken.]")
+_VOICE_RE = re.compile(r"\n*^\[Voice mode: .*\]$", re.M)
+
+
+def with_voice(text: str) -> str:
+    return f"{text}\n\n{VOICE_NOTE}"
+
+
+def is_voice(text: str) -> bool:
+    return bool(_VOICE_RE.search(text))
+
+
 def split_attached(text: str) -> tuple[str, list[str]]:
-    """A prompt's text without its attachment notes, and the attached paths."""
+    """A prompt's text without its attachment and voice-mode notes, and the attached paths."""
+    text = _VOICE_RE.sub("", text).strip() if "[Voice mode: " in text else text
     paths = [p for m in _ATTACHED_RE.finditer(text) for p in re.split(r", (?=/)", m.group(1))]
     return (_ATTACHED_RE.sub("", text).strip(), paths) if paths else (text, [])

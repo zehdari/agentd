@@ -34,5 +34,10 @@ DEFAULT_EFFORT = os.environ.get("AGENTD_DEFAULT_EFFORT") or None
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 HOSTNAME = socket.gethostname()
 
+# Watchdog: a run that goes quiet mid-turn this long is flagged as maybe stuck. Waiting on the model
+# (thinking at max effort can take a few minutes) and on a tool call (Claude's Bash caps at 10 minutes).
+STALL_MODEL = float(os.environ.get("AGENTD_STALL_MINUTES", "6")) * 60
+STALL_TOOL = float(os.environ.get("AGENTD_STALL_TOOL_MINUTES", "20")) * 60
+
 # Discord's upload cap for servers without boosts.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024

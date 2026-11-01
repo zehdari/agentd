@@ -1,8 +1,10 @@
-"""Local text-to-speech for agents: POST /tts {"text", "voice"?, "speed"?} -> MP3.
+"""Local speech for agents: POST /tts {"text", "voice"?, "speed"?, "fast"?} -> MP3, and POST /stt
+(any audio a browser records) -> {"text"}.
 
 Speaks with Higgs TTS 3 through voiceclone's TTS server (:8793) when that is running the higgs
-engine, cloning a stock voice from ~/voiceclone/data/stock/<voice>/; otherwise with Kokoro-82M here.
-Runs as the agentd-tts user service on 127.0.0.1:8781; `agentd-say` is the client.
+engine, cloning a stock voice from ~/voiceclone/data/stock/<voice>/; otherwise, or with "fast", with
+Kokoro-82M here. Listens with Whisper large-v3-turbo (faster-whisper).
+Runs as the agentd-tts user service on 127.0.0.1:8781; `agentd-say` and the dashboard's voice mode use it.
 """
 import asyncio
 import os
@@ -10,7 +12,9 @@ import subprocess
 
 import aiohttp
 import numpy as np
+import torch
 from aiohttp import web
+from faster_whisper import WhisperModel
 from kokoro import KModel, KPipeline
 
 PORT = int(os.environ.get("AGENTD_TTS_PORT", "8781"))
@@ -21,9 +25,13 @@ HIGGS = os.environ.get("AGENTD_HIGGS_URL", "http://127.0.0.1:8793")
 RATE = 24000
 GAP = np.zeros(int(RATE * 0.35), dtype=np.float32)   # pause between Kokoro's sentence chunks
 
-model = KModel(repo_id="hexgrad/Kokoro-82M").to("cuda").eval()
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"   # CPU while the GPU is passed to the Windows VM
+model = KModel(repo_id="hexgrad/Kokoro-82M").to(DEVICE).eval()
 pipelines: dict[str, KPipeline] = {}   # one per language; the voice name's first letter picks it
 lock = asyncio.Lock()
+WHISPER = os.environ.get("AGENTD_WHISPER", "mobiuslabsgmbh/faster-whisper-large-v3-turbo")
+ears = WhisperModel(WHISPER, device=DEVICE, compute_type="float16" if DEVICE == "cuda" else "int8")
+ears_lock = asyncio.Lock()   # its own, so listening never waits behind a long Higgs reply
 
 
 def mp3(src: bytes, *fmt: str) -> bytes:
@@ -68,7 +76,7 @@ async def tts(request: web.Request) -> web.Response:
     try:
         body = await request.json()
         text = str(body.get("text", "")).strip()
-        voice = str(body.get("voice") or VOICE)
+        voice = str(body.get("voice") or (FALLBACK if body.get("fast") else VOICE))
         speed = float(body.get("speed") or SPEED)
     except (ValueError, TypeError):
         return web.json_response({"error": "expected JSON {text, voice?, speed?}"}, status=400)
@@ -87,12 +95,31 @@ async def tts(request: web.Request) -> web.Response:
                         headers={"X-Engine": "higgs" if wav else "kokoro"})
 
 
+def transcribe(audio: bytes) -> str:
+    pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "-", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+                         input=audio, capture_output=True, check=True).stdout
+    segments, _ = ears.transcribe(np.frombuffer(pcm, np.float32), language="en", beam_size=1, vad_filter=True)
+    return " ".join(s.text.strip() for s in segments).strip()
+
+
+async def stt(request: web.Request) -> web.Response:
+    audio = await request.read()
+    if not audio:
+        return web.json_response({"error": "no audio"}, status=400)
+    async with ears_lock:
+        try:
+            text = await asyncio.to_thread(transcribe, audio)
+        except subprocess.CalledProcessError as e:
+            return web.json_response({"error": f"couldn't decode the audio: {e.stderr.decode(errors='replace')[-200:]}"}, status=400)
+    return web.json_response({"text": text})
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "voice": VOICE, "fallback": FALLBACK, "speed": SPEED})
 
 
-app = web.Application(client_max_size=1024 * 1024)
-app.add_routes([web.post("/tts", tts), web.get("/health", health)])
+app = web.Application(client_max_size=32 * 1024 * 1024)
+app.add_routes([web.post("/tts", tts), web.post("/stt", stt), web.get("/health", health)])
 
 if __name__ == "__main__":
     synth("Ready.", FALLBACK, SPEED)   # warm up: loads the voice and compiles kernels before the first request

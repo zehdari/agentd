@@ -22,7 +22,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from . import config, models, push
 from .fork import copy_history, log_cut, transcript_parent
-from .format import ATTACHED, short, split_attached
+from .format import ATTACHED, is_voice, short, split_attached, with_voice
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ MAX_UPLOAD = int(os.environ.get("AGENTD_WEB_MAX_UPLOAD_MB", "2048")) * 1024 * 10
 SENT_DIR = config.STATE_DIR / "sent"   # <thread>.jsonl: what agentd-send actually delivered
 LOGS = config.STATE_DIR / "logs"       # <thread>.jsonl: each agent's raw stream-json
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"   # Claude Code's own session transcripts
+TTS_URL = f"http://127.0.0.1:{os.environ.get('AGENTD_TTS_PORT', '8781')}"   # agentd-tts: speech both ways
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PDF_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agentd" / "pdf"
 # Remote desktop (the Desktop page): noVNC in the browser, bridged here so the dashboard's own check guards it.
@@ -399,13 +400,14 @@ class AgentLog:
                 return
             in_run = bool(self.segs and self.segs[-1][2] and not self._new_run)
             t = self._at(parse_ts(ev.get("timestamp")))
-            text, paths = split_attached(text_of(ev.get("message", {}).get("content")).strip())
+            raw = text_of(ev.get("message", {}).get("content")).strip()
+            text, paths = split_attached(raw)
             if text or paths:
                 # uuid: Claude Code's id for the message, so it can be edited into a new chat.
                 # first: the chat's opening message, which can be edited for Codex agents too.
                 first = not any(e["kind"] == "you" for e in self.entries)
                 self.entries.append({"kind": "you", "t": t, "text": text, "steer": in_run,
-                                     **({"paths": paths} if paths else {}),
+                                     **({"paths": paths} if paths else {}), **({"voice": True} if is_voice(raw) else {}),
                                      **({"uuid": ev["uuid"]} if ev.get("uuid") else {}), **({"first": True} if first else {})})
                 if in_run and t:
                     self.steers.append(t)
@@ -664,6 +666,9 @@ class Dashboard:
             "reply": short(reply[1], 320) if reply else "", "reply_t": reply[0] if reply else None,
             "files": len(al.files), "url": self.jump_url(agent.thread_id) if agent.discord else None,
             "queued": len(self.bot.queued.get(agent.thread_id, [])),
+            # the watchdog's "it may be stuck": since when it has been quiet, and on what
+            "stalled": ({"since": run.stalled_at, "waiting": run.waiting}
+                        if (run := self.bot.runs.get(agent.thread_id)) and run.stalled_at is not None else None),
         }
 
     async def jobs(self) -> list[dict]:
@@ -1161,7 +1166,9 @@ def make_app(bot) -> web.Application:
         mirror = bool(bot.state.settings.get("web_to_discord"))
         if mirror and bot.ch_agents is None:
             return web.json_response({"error": "agentd isn't connected to Discord yet."}, status=503)
-        agent = await bot.start_agent(text, cwd, model, effort, attachments=uploads, discord_thread=mirror)
+        voice = bool(data.get("voice"))
+        agent = await bot.start_agent(with_voice(text) if voice else text, cwd, model, effort, attachments=uploads,
+                                      discord_thread=mirror, title=f"🎙️ {short(text, 86)}" if voice else None)
         return web.json_response({"id": str(agent.thread_id)})
 
     async def message(request):
@@ -1171,11 +1178,12 @@ def make_app(bot) -> web.Application:
             text = str(data.get("text", "")).strip()
             if not text and not uploads:
                 return web.json_response({"error": "Empty message."}, status=400)
+            voice = bool(data.get("voice"))   # said in voice mode
             thread = trigger = None
             if agent.discord:
                 thread = await bot.get_thread(agent.thread_id)
-                trigger = await post_to_discord(thread, text, uploads)
-            await bot.submit(agent, thread, text, trigger, uploads)
+                trigger = await post_to_discord(thread, f"🎙️ {text}" if voice else text, uploads)
+            await bot.submit(agent, thread, with_voice(text) if voice else text, trigger, uploads)
             return web.json_response({"ok": True, "steered": agent.thread_id in bot.runs})
         finally:
             discard(uploads)
@@ -1280,6 +1288,46 @@ def make_app(bot) -> web.Application:
             thread = await bot.get_thread(agent.thread_id)
             await bot.feed_for(thread).send(stopping_text(dropped) + " (from the dashboard)")
         return web.json_response({"ok": True, "stopped": stopped})
+
+    async def stt(request):
+        """Voice input: the audio a browser recorded -> {"text"}, by Whisper in the agentd-tts service."""
+        audio = bytearray()   # streamed, past aiohttp's 1 MB body cap: long dictations
+        async for part in request.content.iter_chunked(1 << 16):
+            audio += part
+            if len(audio) > 25 * 1024 * 1024:
+                return web.json_response({"error": "That recording is too long."}, status=413)
+        if not audio:
+            return web.json_response({"error": "No audio."}, status=400)
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=120)) as http:
+                async with http.post(f"{TTS_URL}/stt", data=bytes(audio)) as r:
+                    return web.json_response(await r.json(), status=r.status)
+        except (ClientError, asyncio.TimeoutError, ValueError) as e:
+            return web.json_response({"error": f"Speech recognition isn't available ({type(e).__name__})."}, status=503)
+
+    async def speak(request):
+        """Voice mode reads replies aloud: {"text", "fast"?} -> MP3 from the agentd-tts service."""
+        data = await body(request)
+        text = str(data.get("text", "")).strip()[:4000]
+        if not text:
+            return web.json_response({"error": "Nothing to say."}, status=400)
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=180)) as http:
+                async with http.post(f"{TTS_URL}/tts", json={"text": text, "fast": bool(data.get("fast"))}) as r:
+                    if r.status != 200:
+                        return web.json_response(await r.json(), status=r.status)
+                    return web.Response(body=await r.read(), content_type="audio/mpeg")
+        except (ClientError, asyncio.TimeoutError, ValueError) as e:
+            return web.json_response({"error": f"Text-to-speech isn't available ({type(e).__name__})."}, status=503)
+
+    async def retry(request):
+        agent = agent_or_404(request)
+        if not bot.retry_agent(agent.thread_id):
+            return web.json_response({"error": "It isn't running any more."}, status=409)
+        if agent.discord:
+            thread = await bot.get_thread(agent.thread_id)
+            await bot.feed_for(thread).send("🔁 Restarting the turn… (from the dashboard)")
+        return web.json_response({"ok": True})
 
     async def delete(request):
         agent = agent_or_404(request)
@@ -1511,7 +1559,8 @@ def make_app(bot) -> web.Application:
         web.post("/api/agents", new_agent), web.post("/api/agents/{id}/message", message),
         web.post("/api/agents/{id}/edit", edit),
         web.post("/api/agents/{id}/fork", fork),
-        web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/delete", delete),
+        web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/retry", retry),
+        web.post("/api/stt", stt), web.post("/api/speak", speak), web.post("/api/agents/{id}/delete", delete),
         web.post("/api/agents/{id}/effort", effort),
         web.post("/api/agents/{id}/seen", seen), web.post("/api/jobs/{unit}/stop", stop_job),
         web.get("/api/gpu", gpu), web.post("/api/gpu", gpu_switch),

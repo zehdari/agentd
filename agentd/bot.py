@@ -20,7 +20,7 @@ from .server import start_server
 from .web import record_sent, start_web
 from .state import Agent, State
 from .sysinfo import snapshot
-from .ui import NULL_FEED, Feed, FullView
+from .ui import NULL_FEED, Feed, FullView, StallView
 
 log = logging.getLogger("agentd")
 
@@ -93,6 +93,7 @@ class AgentBot(discord.Client):
     async def setup_hook(self) -> None:
         register_commands(self)
         self.add_view(FullView())
+        self.add_view(StallView())
         await start_server(self)
         if config.WEB_PORT:
             await start_web(self)
@@ -336,6 +337,7 @@ class AgentBot(discord.Client):
         self.runs[tid] = run
         result, rc, err = None, -1, ""
         turns, duration_ms = 0, 0
+        watchdog = asyncio.create_task(self.watch(agent, feed, run))
         try:
             await run.start()
             async for ev in run.events():
@@ -378,6 +380,7 @@ class AgentBot(discord.Client):
             if run.proc and run.proc.returncode is None:
                 run.stop()
         finally:
+            watchdog.cancel()
             self.runs.pop(tid, None)
             if trigger is not None:
                 self.stop_buttons.pop(trigger.id, None)
@@ -390,7 +393,10 @@ class AgentBot(discord.Client):
                 await trigger.clear_reaction(STOP_BUTTON)
             except discord.HTTPException:
                 pass
-        if run.stopped:
+        if run.retry:
+            agent.status = "idle"
+            await react(trigger, "🔁")
+        elif run.stopped:
             agent.status = "idle"
             await react(trigger, "⏹️")
             await feed.send("⏹️ Stopped.")
@@ -412,6 +418,36 @@ class AgentBot(discord.Client):
                             f"{truncate(detail, 1500).replace('```', 'ˋˋˋ')}\n```", silent=False)
         agent.updated = time.time()
         self.state.save()
+
+    async def watch(self, agent: Agent, feed, run) -> None:
+        """Watchdog: tell you when a run goes quiet mid-turn for longer than a model reply or a tool call
+        should take, e.g. Codex starting a turn and never answering. Stop / Retry come with it."""
+        while True:
+            await asyncio.sleep(15)
+            quiet = time.time() - run.last_event
+            if run.stalled_at is not None:
+                if run.last_event != run.stalled_at:
+                    run.stalled_at = None
+                    await feed.send("-# ▶️ It's responding again.")
+                continue
+            if run.idle or run.stopped or run.proc is None or quiet < run.stall_limit():
+                continue
+            run.stalled_at = run.last_event
+            what = "No reply from the model" if run.waiting == "model" else "A tool call hasn't finished"
+            msg = f"{what} for {fmt_duration(quiet)}. It may be stuck."
+            log.warning("watchdog: %s in %s", msg, agent.thread_id)
+            await feed.send(f"{self.owner_mention} ⚠️ {msg}", silent=False, view=StallView())
+            push.notify_soon(f"⚠️ {agent.title}", msg, f"/agents/{agent.thread_id}", tag=str(agent.thread_id))
+
+    def retry_agent(self, thread_id: int) -> bool:
+        """Stop a stuck run and start a new turn on the same session that carries on, ahead of anything queued."""
+        run = self.runs.get(thread_id)
+        if run is None:
+            return False
+        run.retry = True
+        self.queued.setdefault(thread_id, []).insert(0, (RETRY_TEXT, None))
+        run.stop()
+        return True
 
     def stop_agent(self, thread_id: int) -> tuple[bool, int]:
         """Stop the run in a thread and drop its queue. Returns (was running, queued messages dropped)."""
@@ -463,6 +499,10 @@ class AgentBot(discord.Client):
             lines.append("**Recent**")
             lines += [f"{STATUS_ICONS.get(a.status, '•')} {where(a)} · <t:{int(a.updated)}:R>" for a in recent]
         return truncate("\n".join(lines), 1990)
+
+
+RETRY_TEXT = ("Your last turn stopped responding, so agentd restarted it. "
+              "Carry on from where you left off; redo the last step if it didn't finish.")
 
 
 def where(agent: Agent) -> str:
