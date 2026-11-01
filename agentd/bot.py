@@ -12,7 +12,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from . import config, models, push
+from . import config, fork, models, push
 from .activity import ActivityRelay
 from .format import ATTACHED, fmt_duration, short, tables_to_code, tool_full, tool_line, tool_result_text, truncate
 from .runner import CodexRun, Run, make_run
@@ -212,12 +212,13 @@ class AgentBot(discord.Client):
 
     # ---- agents ----------------------------------------------------------
 
-    async def start_agent(self, text: str, cwd: Path, model: str | None, effort: str | None = None, *,
+    async def start_agent(self, text: str | None, cwd: Path, model: str | None, effort: str | None = None, *,
                           origin: discord.Message | None = None, attachments=(), discord_thread: bool = True,
                           title: str | None = None, setup=None) -> Agent:
         """Start an agent in a new #agents thread, or with no Discord presence at all
-        (discord_thread=False, for the dashboard). `setup(agent)` runs before its first run starts."""
-        title = title or short(text, 90) or "agent"
+        (discord_thread=False, for the dashboard). `setup(agent)` runs before its first run starts.
+        With no text the chat waits for your first message."""
+        title = title or short(text or "", 90) or "agent"
         if not discord_thread:
             thread = trigger = None
         elif origin is not None:
@@ -225,7 +226,7 @@ class AgentBot(discord.Client):
             trigger = origin
         else:
             files = f"\n-# 📎 {truncate(', '.join(a.filename for a in attachments), 200)}" if attachments else ""
-            trigger = await self.ch_agents.send(f">>> {truncate(text, 1700)}{files}", silent=True)
+            trigger = await self.ch_agents.send(f">>> {truncate(text or title, 1700)}{files}", silent=True)
             thread = await trigger.create_thread(name=title, auto_archive_duration=10080)
         if not effort and not models.is_codex(model):
             effort = config.DEFAULT_EFFORT
@@ -238,8 +239,35 @@ class AgentBot(discord.Client):
         self.state.save()
         await self.feed_for(thread).send(
             f"-# 📁 `{cwd}` · model: {models.label(model)} · effort: {agent.effort or 'default'}")
-        await self.submit(agent, thread, text, trigger, attachments)
+        if text is not None:
+            await self.submit(agent, thread, text, trigger, attachments)
         return agent
+
+    async def fork_agent(self, src: Agent, uuid: str | None = None, text: str | None = None, *,
+                         discord_thread: bool, before: float | None = None) -> Agent:
+        """A new chat with `src`'s conversation so far, or up to just before your message `uuid` (sent at
+        `before`). It starts on `text`, or waits for your next message. The original is left as it is.
+        Raises ValueError with a reason to show the user."""
+        if uuid is None and src.thread_id in self.active:
+            raise ValueError("It's still working. Fork it once it finishes, or fork from an earlier reply.")
+        cwd = resolve_dir(src.cwd)
+        if cwd is None:
+            raise ValueError(f"Its directory is gone: {src.cwd}")
+        at, cut = await asyncio.to_thread(fork.fork_point, src, uuid, models.is_codex(src.model))
+
+        def setup(new: Agent) -> None:
+            new.parent, new.forked = src.thread_id, True
+            new.seen = time.time()   # it's yours already, not waiting on you
+            new.fork_from, new.fork_at = src.session_id, at
+            fork.copy_history(src.thread_id, new.thread_id, cut, before or time.time())
+
+        title = f"{short(src.title.removesuffix(' (fork)').removesuffix(' (edited)'), 80)} (fork)"
+        new = await self.start_agent(text, cwd, src.model, src.effort, discord_thread=discord_thread,
+                                     title=title, setup=setup)
+        if new.discord:
+            await self.feed_for(await self.get_thread(new.thread_id)).send(
+                f"-# 🍴 Forked from {where(src)}" + ("" if text else ". Reply here to carry on from there."))
+        return new
 
     async def submit(self, agent: Agent, thread, text: str, trigger, attachments=()) -> None:
         agent.seen = time.time()
@@ -512,6 +540,23 @@ def register_commands(bot: AgentBot) -> None:
             await inter.response.send_message("Nothing is running here.", ephemeral=True)
             return
         await inter.response.send_message(stopping_text(dropped))
+
+    @tree.command(name="fork", description="Fork this thread's conversation into a new thread; this one stays as it is")
+    @app_commands.describe(message="Start the fork on this message (default: it waits for you to reply)")
+    async def fork_thread(inter: discord.Interaction, message: Optional[str] = None):
+        if not await allowed(inter):
+            return
+        agent = thread_agent(inter)
+        if agent is None:
+            await inter.response.send_message("Use this inside an agent thread.", ephemeral=True)
+            return
+        await inter.response.defer(thinking=True)
+        try:
+            new = await bot.fork_agent(agent, text=(message or "").strip() or None, discord_thread=True)
+        except ValueError as e:
+            await inter.followup.send(f"Couldn't fork it: {e}")
+            return
+        await inter.followup.send(f"🍴 Forked → <#{new.thread_id}>")
 
     @tree.command(description="Machine health and agent overview")
     async def status(inter: discord.Interaction):

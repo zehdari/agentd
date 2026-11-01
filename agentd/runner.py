@@ -46,8 +46,10 @@ class Run:
         ]
         if self.agent.session_id:
             args += ["--resume", self.agent.session_id]
-        elif self.agent.fork_from:   # an edited message: a copy of that conversation up to just before it
-            args += ["--resume", self.agent.fork_from, "--fork-session", "--resume-session-at", self.agent.fork_at]
+        elif self.agent.fork_from:   # a branch of another chat: a copy of that conversation, up to fork_at
+            args += ["--resume", self.agent.fork_from, "--fork-session"]
+            if self.agent.fork_at:
+                args += ["--resume-session-at", self.agent.fork_at]
         else:
             args += ["--name", self.agent.title[:60]]
         if self.agent.model:
@@ -185,14 +187,16 @@ class CodexRun(Run):
         args = [models.codex_bin() or "codex", "exec"]
         if self.agent.session_id:
             args += ["resume"]
+        elif self.agent.fork_from:   # a fork: a copy of that whole conversation as a new session
+            args += ["fork"]
         args += ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
                  "-c", f"developer_instructions={json.dumps(SYSTEM_PROMPT)}"]
         if self.agent.model:
             args += ["-m", self.agent.model]
         if self.agent.effort:
             args += ["-c", f"model_reasoning_effort={json.dumps(self.agent.effort)}"]
-        if self.agent.session_id:
-            args += [self.agent.session_id]
+        if self.agent.session_id or self.agent.fork_from:
+            args += [self.agent.session_id or self.agent.fork_from]
         return args + ["-"]   # the prompt comes on stdin
 
     async def start(self) -> None:

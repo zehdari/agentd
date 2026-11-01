@@ -611,6 +611,13 @@ pre.code code { background: none; padding: 0; }
   .bubble-row .bubble-edit { opacity: 0; transition: opacity .15s var(--ease); }
   .bubble-row:hover .bubble-edit, .bubble-edit:focus-visible { opacity: 1; }
 }
+.reply-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.reply-row > .reply { align-self: stretch; }
+.reply-row .reply-fork { margin: 0 0 0 -6px; }
+@media (any-hover: hover) {
+  .reply-row .reply-fork { opacity: 0; transition: opacity .15s var(--ease); }
+  .reply-row:hover .reply-fork, .reply-fork:focus-visible { opacity: 1; }
+}
 .edit-form { align-self: stretch; }
 .edit-form textarea {
   width: min(100%, 560px); min-height: 64px; max-height: 320px; padding: 10px 14px; resize: none;
@@ -684,7 +691,7 @@ pre.code code { background: none; padding: 0; }
 }
 .tools-toggle { flex-wrap: wrap; row-gap: 2px; }
 .tools-now { flex-basis: 100%; padding-left: 20px; }
-.details .d-actions a.btn span { display: inline; }
+.details .d-actions .btn span { display: inline; }
 /* home-screen app: keep content clear of the notch and home indicator */
 @media (display-mode: standalone) {
   .topbar { padding-top: env(safe-area-inset-top); height: calc(60px + env(safe-area-inset-top)); }

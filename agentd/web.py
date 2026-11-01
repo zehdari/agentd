@@ -21,6 +21,7 @@ from pathlib import Path
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from . import config, models, push
+from .fork import copy_history, log_cut, transcript_parent
 from .format import ATTACHED, short, split_attached
 
 log = logging.getLogger(__name__)
@@ -533,59 +534,6 @@ def _json(raw: bytes) -> dict | None:
         return None
 
 
-# ---------------------------------------------------------------- editing a message into a new chat
-
-def transcript_parent(session_id: str, uuid: str) -> tuple[bool, str | None]:
-    """(found, the message before it) for message `uuid` in a Claude Code session transcript.
-    A conversation's first message has no message before it. One sent mid-run is filed as a
-    queued_command attachment that points back to it."""
-    for path in glob.glob(str(CLAUDE_PROJECTS / "*" / f"{glob.escape(session_id)}.jsonl")):
-        with open(path, "rb") as f:
-            for raw in f:
-                if uuid.encode() not in raw:
-                    continue
-                try:
-                    ev = json.loads(raw)
-                except ValueError:
-                    continue
-                if ev.get("uuid") == uuid or (ev.get("attachment") or {}).get("source_uuid") == uuid:
-                    return True, ev.get("parentUuid")
-    return False, None
-
-
-def log_cut(thread_id: int, uuid: str) -> int | None:
-    """Where message `uuid` starts in an agent's log, in bytes: everything before it is the history it follows."""
-    offset = 0
-    try:
-        with open(LOGS / f"{thread_id}.jsonl", "rb") as f:
-            for raw in f:
-                if uuid.encode() in raw:
-                    try:
-                        ev = json.loads(raw)
-                    except ValueError:
-                        ev = {}
-                    if ev.get("type") == "user" and ev.get("uuid") == uuid:
-                        return offset
-                offset += len(raw)
-    except OSError:
-        pass
-    return None
-
-
-def copy_history(src: int, dst: int, cut: int, before: float) -> None:
-    """Give a chat edited off another one the conversation so far: the log up to `cut` and the files sent before `before`."""
-    LOGS.mkdir(parents=True, exist_ok=True)
-    with open(LOGS / f"{src}.jsonl", "rb") as f:
-        (LOGS / f"{dst}.jsonl").write_bytes(f.read(cut))
-    try:
-        sent = [raw for raw in (SENT_DIR / f"{src}.jsonl").read_bytes().splitlines(keepends=True)
-                if json.loads(raw).get("t", 0) < before]
-    except (OSError, ValueError):
-        sent = []
-    if sent:
-        (SENT_DIR / f"{dst}.jsonl").write_bytes(b"".join(sent))
-
-
 # ---------------------------------------------------------------- machine
 
 class Machine:
@@ -967,7 +915,7 @@ class Dashboard:
             "context": al.context,
             # the title is cut to 90 characters; the Details panel shows the whole first message
             "prompt": short(next((e["text"] for e in al.entries if e["kind"] == "you" and e["text"]), agent.title), 1000),
-            "parent": ({"id": str(agent.parent), "title": parent.title}
+            "parent": ({"id": str(agent.parent), "title": parent.title, "forked": agent.forked}
                        if (parent := self.bot.state.agents.get(agent.parent or 0)) else None),
             "outbox": [{"t": m["t"], "text": split_attached(m["text"])[0], "state": m["state"],
                         "files": [inbox_name(p) for p in split_attached(m["text"])[1]]}
@@ -1281,6 +1229,28 @@ def make_app(bot) -> web.Application:
                                     title=title, setup=setup)
         return web.json_response({"id": str(new.thread_id)})
 
+    async def fork(request):
+        """Fork a chat into a new one that waits for your next message: the whole conversation, or with
+        `uuid`, the conversation up to just before that message of yours (a fork from the reply above it)."""
+        agent = agent_or_404(request)
+        uuid = str((await body(request)).get("uuid") or "")
+        before = None
+        if uuid:
+            if not UUID.match(uuid):
+                return web.json_response({"error": "bad message id"}, status=400)
+            entry = next((e for e in dash.log_for(agent).entries if e["kind"] == "you" and e.get("uuid") == uuid), None)
+            if entry is None:
+                return web.json_response({"error": "That message isn't in this chat."}, status=404)
+            before = entry["t"]
+        mirror = bool(bot.state.settings.get("web_to_discord"))
+        if mirror and bot.ch_agents is None:
+            return web.json_response({"error": "agentd isn't connected to Discord yet."}, status=503)
+        try:
+            new = await bot.fork_agent(agent, uuid or None, discord_thread=mirror, before=before)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response({"id": str(new.thread_id)})
+
     async def post_to_discord(thread, text: str, uploads: list[Upload]):
         """Mirror a dashboard message into the agent's thread, with the files that fit under Discord's cap."""
         import discord
@@ -1540,6 +1510,7 @@ def make_app(bot) -> web.Application:
         web.get("/api/models", model_catalog),
         web.post("/api/agents", new_agent), web.post("/api/agents/{id}/message", message),
         web.post("/api/agents/{id}/edit", edit),
+        web.post("/api/agents/{id}/fork", fork),
         web.post("/api/agents/{id}/stop", stop), web.post("/api/agents/{id}/delete", delete),
         web.post("/api/agents/{id}/effort", effort),
         web.post("/api/agents/{id}/seen", seen), web.post("/api/jobs/{unit}/stop", stop_job),

@@ -287,6 +287,7 @@ function fileTiles(paths, exists) {
 
 const ICONS = {
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>',
+  fork: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v1a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 11v6"/>',
   clip: '<path d="m20 11.5-7.8 7.8a5 5 0 0 1-7.1-7.1l8-8a3.3 3.3 0 0 1 4.7 4.7l-7.9 7.9a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3"/>',
   agents: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
   jobs: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
@@ -996,6 +997,16 @@ function chatTime(t) {
 
 // Which of your messages can be edited into a new chat: any in a Claude chat, the first in a ChatGPT one.
 const editKey = e => e.uuid || (e.first ? "first" : "");
+// A reply that ends a turn can be forked from: the conversation up to just before your next message,
+// or the whole chat after the latest reply. "" when this reply can't be (more follows in its turn).
+function forkKey(d, i) {
+  for (let j = i + 1; j < d.entries.length; j++) {
+    const e = d.entries[j];
+    if (e.kind === "claude") return "";
+    if (e.kind === "you") return e.uuid || "";
+  }
+  return d.status !== "running" && d.session_id ? "all" : "";
+}
 
 function convoHtml(d) {
   const out = [];
@@ -1049,7 +1060,10 @@ function convoHtml(d) {
         ${note || edit ? `<div class="bubble-meta">${note}${edit}</div>` : ""}</div>`);
     } else if (e.kind === "claude") {
       stamp(e.t);
-      out.push(`<div class="reply md">${md(e.text)}</div>`);
+      const fork = forkKey(d, i);
+      out.push(fork ? `<div class="reply-row"><div class="reply md">${md(e.text)}</div>
+        <button class="bubble-edit reply-fork" type="button" data-fork="${esc(fork)}" title="Fork into a new chat from here">${icon("fork", "i i-sm")}<span>Fork</span></button></div>`
+        : `<div class="reply md">${md(e.text)}</div>`);
     } else if (e.kind === "file") {
       stamp(e.t);
       out.push(`<div class="reply files-msg">${e.caption ? `<p class="files-cap">${esc(e.caption)}</p>` : ""}<div class="thumbs">${fileTiles(e.paths, e.exists)}</div></div>`);
@@ -1068,6 +1082,9 @@ function convoHtml(d) {
     const note = m.state === "sending" && m.files.length ? (m.pct < 1 ? `Uploading ${Math.floor(m.pct * 100)}%…` : "Sending…") : OUT_NOTE[m.state] || "Sent";
     out.push(`<div class="bubble-row pending">${files}${m.text ? `<div class="bubble"><div class="md">${md(m.text)}</div></div>` : ""}
       <p class="bubble-note">${note}</p></div>`);
+  }
+  if (d.parent && d.parent.forked && !d.session_id && !(d.outbox || []).length && !ui.sending.length) {
+    out.push(`<p class="chat-time">Forked from here · write a message to carry on</p>`);
   }
   if (d.status === "running") {
     out.push(`<p class="working"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>Working · <span class="work-t" data-start="${d.started}">${dur(d.now - d.started)}</span>${d.queued ? ` · ${d.queued} message${d.queued > 1 ? "s" : ""} queued` : ""}</p>`);
@@ -1192,13 +1209,14 @@ function detailsHtml(d) {
         <dt>Directory</dt><dd><code>${esc(d.cwd)}</code></dd>
         <dt>Model</dt><dd>${esc(d.model_label || d.model || "default")}</dd>
         <dt>Started</dt><dd>${esc(when(d.created))}</dd>
-        ${d.parent ? `<dt>Edited from</dt><dd><a href="/agents/${esc(d.parent.id)}">${esc(d.parent.title)}</a></dd>` : ""}
+        ${d.parent ? `<dt>${d.parent.forked ? "Forked" : "Edited"} from</dt><dd><a href="/agents/${esc(d.parent.id)}">${esc(d.parent.title)}</a></dd>` : ""}
         <dt>Turns</dt><dd>${d.turns} · ${d.tool_count} tool calls</dd>
         ${mix ? `<dt>Tools</dt><dd>${mix}</dd>` : ""}
         ${tokensHtml(d)}
       </dl>
       <div class="d-actions">${effortSel}
         ${d.url ? `<a class="btn" href="${esc(d.url)}" target="_blank" rel="noopener">${icon("ext")}<span>Discord thread</span></a>` : ""}
+        ${d.status !== "running" && d.session_id ? `<button class="btn" type="button" data-fork="all">${icon("fork")}<span>Fork chat</span></button>` : ""}
         ${d.status === "running" ? "" : ui.confirm === `delete:${d.id}`
           ? `<button class="btn danger" type="button" data-delete="${d.id}">${icon("trash")}<span>Delete for good?</span></button>`
           : `<button class="btn danger" type="button" data-arm="delete:${d.id}">${icon("trash")}<span>Delete chat</span></button>`}</div>
@@ -1534,6 +1552,18 @@ async function deleteAgent(id, btn) {
   if (AGENT_ID) { ui.details = false; navigate("/"); } else { ui.confirm = null; rerender(); refresh(); }
 }
 
+async function forkChat(key, btn) {
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/agents/${AGENT_ID}/fork`, key === "all" ? {} : { uuid: key });
+    ui.details = false;
+    navigate(`/agents/${r.id}`);
+  } catch (err) {
+    btn.disabled = false;
+    alert(`Couldn’t fork it: ${err.message}`);
+  }
+}
+
 function startEdit(key) {
   const e = ui.data && ui.data.entries.find(x => x.kind === "you" && editKey(x) === key);
   if (!e) return;
@@ -1600,6 +1630,7 @@ document.addEventListener("click", e => {
   else if (t.hasAttribute("data-showall")) { ui.showAll = true; rerender(); }
   else if (t.hasAttribute("data-older")) loadOlder();
   else if (t.dataset.edit) startEdit(t.dataset.edit);
+  else if (t.dataset.fork) forkChat(t.dataset.fork, t);
   else if (t.hasAttribute("data-edit-cancel")) stopEdit();
   else if (t.dataset.expand) {
     const k = +t.dataset.expand;

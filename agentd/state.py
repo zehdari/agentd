@@ -23,11 +23,13 @@ class Agent:
     # False for agents started on the dashboard with Discord mirroring off: no thread, and
     # thread_id is just a local id.
     discord: bool = True
-    # A chat started by editing a message in another one: its first run resumes `fork_from` (a session
-    # id) cut off at message `fork_at`, as a new session. `parent` is the thread id it came from.
+    # A chat branched off another one, by editing a message there or forking it: its first run resumes
+    # `fork_from` (a session id) cut off at message `fork_at` (or whole), as a new session. `parent` is
+    # the thread id it came from; `forked` tells a fork from an edit.
     fork_from: str | None = None
     fork_at: str | None = None
     parent: int | None = None
+    forked: bool = False
 
 
 class State:
