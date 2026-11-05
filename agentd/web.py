@@ -20,7 +20,7 @@ from pathlib import Path
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
-from . import config, models, push
+from . import artifacts, config, models, push
 from .fork import copy_history, log_cut, transcript_parent
 from .format import ATTACHED, is_voice, short, split_attached, with_voice
 
@@ -35,6 +35,9 @@ UNIT_NAME = re.compile(r"^[\w@.:-]+$")
 INBOX = config.STATE_DIR / "inbox"     # files you attach, from Discord or here
 MAX_UPLOAD = int(os.environ.get("AGENTD_WEB_MAX_UPLOAD_MB", "2048")) * 1024 * 1024   # per message
 SENT_DIR = config.STATE_DIR / "sent"   # <thread>.jsonl: what agentd-send actually delivered
+KEPT = SENT_DIR / "files"              # <hash>/<name>: lasting copies, so a chat outlives its /tmp plots
+KEEP_UP_TO = 500 * 1024 * 1024         # anything bigger stays where it is
+IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 LOGS = config.STATE_DIR / "logs"       # <thread>.jsonl: each agent's raw stream-json
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"   # Claude Code's own session transcripts
 TTS_URL = f"http://127.0.0.1:{os.environ.get('AGENTD_TTS_PORT', '8781')}"   # agentd-tts: speech both ways
@@ -47,6 +50,7 @@ DESKTOP_SOCK = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"
 WINVM = os.environ.get("AGENTD_WINVM", str(Path.home() / ".local" / "bin" / "winvm"))
 SWITCH_UNIT = "winvm-switch"
 WINDOWS_VNC = os.environ.get("AGENTD_WINDOWS_VNC", "http://127.0.0.1:8006/websockify")   # dockurr/windows' websockify
+EMPTY_FORK_FOR = 3600                  # a fork nobody wrote to is deleted after this long; it's hidden right away
 PDF_WIDTH = 1400                       # px; phones zoom in from here
 PDF_MAX_PAGES = 300
 
@@ -66,11 +70,43 @@ def sent_since() -> float:
 SENT_SINCE = sent_since()
 
 
+def keep(path: str) -> str:
+    """A lasting copy of a file sent to the chat, under its own name. Falls back to the file itself."""
+    src = Path(path).resolve()
+    try:
+        if src.stat().st_size > KEEP_UP_TO:
+            return str(src)
+        digest = hashlib.sha256()
+        with open(src, "rb") as f:
+            while chunk := f.read(1 << 20):
+                digest.update(chunk)
+        dest = KEPT / digest.hexdigest()[:16] / src.name
+        if not dest.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+        return str(dest.resolve())
+    except OSError as e:
+        log.warning("could not keep %s: %s", src, e)
+        return str(src)
+
+
+def already_sent(thread_id, path: str) -> bool:
+    """Whether this exact file is already in the chat, so rereading an image doesn't repost it."""
+    try:
+        return keep(path) in (SENT_DIR / f"{int(thread_id)}.jsonl").read_text()
+    except OSError:
+        return False
+
+
+def in_inbox(path: str) -> bool:
+    return Path(path).resolve().is_relative_to(INBOX.resolve())
+
+
 def record_sent(thread_id, paths: list[str], caption: str) -> None:
     """Called by agentd-send's back end once the files are known to exist."""
     if not thread_id or not paths:
         return
-    entry = {"t": time.time(), "paths": [str(Path(p).resolve()) for p in paths], "caption": caption}
+    entry = {"t": time.time(), "paths": [keep(p) for p in paths], "caption": caption}
     with open(SENT_DIR / f"{int(thread_id)}.jsonl", "a") as f:
         f.write(json.dumps(entry) + "\n")
 
@@ -735,6 +771,15 @@ class Dashboard:
                         "image": p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")})
         return out
 
+    def artifact_list(self) -> list[dict]:
+        out = []
+        for item in artifacts.listing():
+            agent = self.bot.state.agents.get(int(item["thread"])) if item.get("thread") else None
+            out.append({"slug": item["slug"], "title": item["title"], "t": item["updated"],
+                        "agent": str(agent.thread_id) if agent else None,
+                        "agent_title": short(agent.title, 60) if agent else None})
+        return out
+
     def known_file(self, path: str) -> bool:
         if Path(path).resolve().is_relative_to(INBOX.resolve()):
             return True
@@ -875,16 +920,42 @@ class Dashboard:
         installed = bool(shutil.which("codex")) or (Path.home() / ".local" / "bin" / "codex").exists()
         return {"claude": claude, "codex": {"installed": installed, **self.codex}}
 
+    def empty_fork(self, agent) -> bool:
+        """A fork nobody has written to, say from a stray tap. Its own chat still opens; lists leave it out."""
+        return agent.forked and not agent.session_id and not agent.turns and agent.thread_id not in self.bot.active
+
+    async def remove_agent(self, agent) -> None:
+        tid = agent.thread_id
+        self.bot.stop_agent(tid)   # drops anything still queued for it
+        del self.bot.state.agents[tid]
+        self.bot.state.save()
+        self.logs.pop(tid, None)
+        for path in (config.STATE_DIR / "logs" / f"{tid}.jsonl", SENT_DIR / f"{tid}.jsonl"):
+            path.unlink(missing_ok=True)
+        shutil.rmtree(INBOX / str(tid), ignore_errors=True)
+        if agent.discord:   # archived, not deleted: messages there no longer reach an agent
+            import discord
+            try:
+                thread = await self.bot.get_thread(tid)
+                await thread.send("-# 🗑️ Deleted from the dashboard. Messages here no longer reach an agent.")
+                await thread.edit(archived=True)
+            except discord.HTTPException:
+                log.warning("dashboard: couldn't archive thread %s", tid, exc_info=True)
+
     async def overview(self) -> dict:
         now = time.time()
-        agents = sorted(self.bot.state.agents.values(), key=lambda a: a.updated, reverse=True)
+        for agent in [a for a in self.bot.state.agents.values() if self.empty_fork(a)]:
+            if now - max(agent.created, agent.seen) > EMPTY_FORK_FOR:
+                await self.remove_agent(agent)
+        agents = sorted((a for a in self.bot.state.agents.values() if not self.empty_fork(a)),
+                        key=lambda a: a.updated, reverse=True)
         summaries = [self.agent_summary(a, now) for a in agents]
         order = {"running": 0, "waiting": 1}
         summaries.sort(key=lambda s: (order.get(s["status"], 2), -s["updated"]))
         return {
             "now": now, "window": WINDOW, "agents": summaries, "pending": self.pending(),
             "machine": self.machine.snapshot(), "jobs": self.recent_jobs(await self.jobs(), now),
-            "files": self.files(),
+            "files": self.files(), "artifacts": self.artifact_list(),
             "services": await self.services(), "usage": self.usage(),
             "settings": self.bot.state.settings,
         }
@@ -912,7 +983,8 @@ class Dashboard:
             "now": now, "window": WINDOW, **self.agent_summary(agent, now), "session_id": agent.session_id,
             "resume": resume, "tools": al.tools, "total_entries": total, "entries_from": start,
             "entries": entry_list(al.entries[start:]),
-            "jobs": jobs, "file_list": files, "efforts": models.efforts_for(agent.model),
+            "jobs": jobs, "file_list": files,
+            "artifact_list": [a for a in self.artifact_list() if a["agent"] == str(agent.thread_id)], "efforts": models.efforts_for(agent.model),
             "subagents": [{**sub, "model_label": models.label(sub["model"]) if sub["model"] else ""}
                           for sub in al.subagents.values()],
             "tokens": [{"model": models.label(m), **t} for m, t in
@@ -1044,6 +1116,8 @@ def make_app(bot) -> web.Application:
 
     @web.middleware
     async def guard(request: web.Request, handler):
+        if request.match_info.handler is artifacts.serve:
+            return await handler(request)   # the link is the key; the sandbox keeps pages off the API
         # Behind Caddy every request comes from loopback; judge the client Caddy forwarded for instead
         # (Caddy replaces any X-Forwarded-For the client sent, so it can't be spoofed through the proxy).
         client = request.remote
@@ -1331,24 +1405,9 @@ def make_app(bot) -> web.Application:
 
     async def delete(request):
         agent = agent_or_404(request)
-        tid = agent.thread_id
         if dash.status(agent) == "running":
             return web.json_response({"error": "It's still running. Stop it first."}, status=409)
-        bot.stop_agent(tid)   # drops anything still queued for it
-        del bot.state.agents[tid]
-        bot.state.save()
-        dash.logs.pop(tid, None)
-        for path in (config.STATE_DIR / "logs" / f"{tid}.jsonl", SENT_DIR / f"{tid}.jsonl"):
-            path.unlink(missing_ok=True)
-        shutil.rmtree(INBOX / str(tid), ignore_errors=True)
-        if agent.discord:   # archived, not deleted: messages there no longer reach an agent
-            import discord
-            try:
-                thread = await bot.get_thread(tid)
-                await thread.send("-# 🗑️ Deleted from the dashboard. Messages here no longer reach an agent.")
-                await thread.edit(archived=True)
-            except discord.HTTPException:
-                log.warning("dashboard: couldn't archive thread %s", tid, exc_info=True)
+        await dash.remove_agent(agent)
         return web.json_response({"ok": True})
 
     async def effort(request):
@@ -1550,7 +1609,7 @@ def make_app(bot) -> web.Application:
     app = web.Application(middlewares=[guard])
     app.add_routes([
         web.get("/", page), web.get("/agents/{id}", page), web.get("/system", page),
-        *[web.get(f"/{name}", page) for name in ("usage", "jobs", "files", "machine", "desktop", "settings")],
+        *[web.get(f"/{name}", page) for name in ("usage", "jobs", "files", "artifacts", "machine", "desktop", "settings")],
         web.get("/rd/ws/{which}", remote_desktop), web.get("/rd/open/{which}", open_desktop), web.static("/rd/novnc", NOVNC),
         web.get("/api/overview", overview), web.get("/api/agents/{id}", agent_detail),
         web.get("/api/agents/{id}/history", agent_history), web.get("/api/agents/{id}/subagents/{sub}", subagent),
@@ -1568,6 +1627,7 @@ def make_app(bot) -> web.Application:
         web.get("/api/push/key", push_key), web.post("/api/push/subscribe", push_subscribe),
         web.post("/api/push/unsubscribe", push_unsubscribe), web.post("/api/push/test", push_test),
         web.get("/sw.js", service_worker),
+        web.get("/a/{slug}", artifacts.serve), web.get("/a/{slug}/{path:.*}", artifacts.serve),
         web.static("/static", STATIC),
     ])
 

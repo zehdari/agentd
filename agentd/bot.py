@@ -17,7 +17,7 @@ from .activity import ActivityRelay
 from .format import ATTACHED, fmt_duration, short, tables_to_code, tool_full, tool_line, tool_result_text, truncate
 from .runner import CodexRun, Run, make_run
 from .server import start_server
-from .web import record_sent, start_web
+from .web import IMAGES, already_sent, in_inbox, record_sent, start_web
 from .state import Agent, State
 from .sysinfo import snapshot
 from .ui import NULL_FEED, Feed, FullView, StallView
@@ -183,7 +183,7 @@ class AgentBot(discord.Client):
         """Back end of `agentd-send`: post files/message to an agent's thread (or #alerts)."""
         agent = self.state.agents.get(int(thread_id)) if thread_id else None
         if agent is not None:
-            record_sent(agent.thread_id, files, message)   # the dashboard shows it from here
+            await asyncio.to_thread(record_sent, agent.thread_id, files, message)   # the dashboard shows it from here
         if alert:
             push.notify_soon(agent.title if agent else "agentd", message or ", ".join(Path(f).name for f in files),
                              f"/agents/{agent.thread_id}" if agent else "/")
@@ -210,6 +210,16 @@ class AgentBot(discord.Client):
             else:
                 # Ping in the thread itself rather than cross-posting to #alerts.
                 await self.feed_for(target).send(content, silent=not ping, **kwargs)
+
+    async def show_read_image(self, agent, path) -> None:
+        """Images an agent opens land in its chat by themselves, so you see what it's looking at."""
+        if not path or Path(path).suffix.lower() not in IMAGES or not Path(path).is_file() or in_inbox(path):
+            return
+        try:
+            if not await asyncio.to_thread(already_sent, agent.thread_id, path):
+                await self.deliver(agent.thread_id, [path], "", False)
+        except (OSError, ValueError, discord.HTTPException) as e:
+            log.warning("could not show %s: %s", path, e)
 
     # ---- agents ----------------------------------------------------------
 
@@ -353,6 +363,8 @@ class AgentBot(discord.Client):
                         elif block.get("type") == "tool_use":
                             name, inp = block.get("name", ""), block.get("input")
                             await feed.tool(("↳ " if nested else "") + tool_line(name, inp), tool_full(name, inp))
+                            if name == "Read":
+                                await self.show_read_image(agent, (inp or {}).get("file_path"))
                 elif kind == "user" and ev.get("isReplay") and not ev.get("origin"):   # origin: Claude Code's own notices
                     read = run.unread.popleft() if run.unread else None
                     if read is not None:

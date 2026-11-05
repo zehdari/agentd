@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page title</title>
+<link rel="stylesheet" href="/a/theme/artifact.css">
+<script src="/a/theme/artifact.js"></script>
+</head>
+<body>
+<div class="page">
+  <nav class="toc" aria-label="On this page">
+    <b>On this page</b>
+    <a href="#first">First section</a>
+    <a href="#second">Second section</a>
+  </nav>
+
+  <main>
+    <header>
+      <h1>State the finding as the title</h1>
+      <p class="lead">Give the answer in two or three sentences, so reading this far is enough.</p>
+    </header>
+
+    <div class="cards">
+      <div class="card"><b>42 ms</b><span>What this number is</span></div>
+      <div class="card good"><b>1.9 mm</b><span>A result that's good</span></div>
+      <div class="card bad"><b>$1,080</b><span>A result that's bad</span></div>
+    </div>
+
+    <section id="first" class="split">
+      <div>
+        <h2>Section with text beside a chart</h2>
+        <p>Say what the chart shows.</p>
+      </div>
+      <figure>
+        <img src="./plot.png" alt="Describe the chart">
+        <figcaption>Where the data came from.</figcaption>
+      </figure>
+    </section>
+
+    <section id="second">
+      <h2>Section with a table</h2>
+      <div class="table">
+        <table>
+          <thead><tr><th>Option</th><th>Cost</th><th>Result</th></tr></thead>
+          <tbody><tr><td>First</td><td>$1</td><td>Good</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>

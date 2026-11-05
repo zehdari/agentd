@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Publish a page at an unguessable link, https://agentd.zehdari.com/a/<slug>/, and manage them."""
+import argparse
+import base64
+import glob
+import html
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+BASE = os.environ.get("AGENTD_ARTIFACT_URL", "https://agentd.zehdari.com")
+ROOT = Path(os.environ.get("AGENTD_STATE_DIR", "~/.local/state/agentd")).expanduser() / "artifacts"
+SKIP = shutil.ignore_patterns(".*", "node_modules", "__pycache__")   # .git and .env have no business on a link
+
+
+def url(slug: str) -> str:
+    return f"{BASE}/a/{slug}/"
+
+
+def slug_of(ref: str) -> str:
+    """A slug, or the full link pasted from a chat."""
+    slug = ref.rstrip("/").rsplit("/", 1)[-1]
+    if not (ROOT / slug / "meta.json").is_file():
+        sys.exit(f"no such artifact: {ref}")
+    return slug
+
+
+def meta_of(slug: str) -> dict:
+    return json.loads((ROOT / slug / "meta.json").read_text())
+
+
+def by_source(src: Path) -> str | None:
+    """The artifact already published from this path. /tmp is shared, so a name there means nothing."""
+    if src.is_relative_to("/tmp"):
+        return None
+    for path in ROOT.glob("*/meta.json"):
+        if meta_of(path.parent.name).get("source") == str(src):
+            return path.parent.name
+    return None
+
+
+def page_title(index: Path) -> str:
+    found = re.search(r"<title[^>]*>(.*?)</title>", index.read_text(errors="replace"), re.I | re.S)
+    return " ".join(html.unescape(found.group(1)).split()) if found else ""
+
+
+def publish(args) -> None:
+    src = Path(args.path).resolve()
+    is_page = src.is_file() and src.suffix.lower() in (".html", ".htm")
+    if not is_page and not (src / "index.html").is_file():
+        sys.exit(f"{args.path}: expected an .html file or a directory with an index.html")
+
+    slug = slug_of(args.update) if args.update else None if args.new else by_source(src)
+    existing = slug is not None
+    slug = slug or base64.b32encode(secrets.token_bytes(15)).decode().lower()
+    home = ROOT / slug
+    home.mkdir(parents=True, exist_ok=True)
+    new, old = home / f".new-{os.getpid()}", home / f".old-{os.getpid()}"
+    try:
+        if is_page:
+            new.mkdir()
+            shutil.copyfile(src, new / "index.html")
+        else:
+            shutil.copytree(src, new, ignore=SKIP)   # follows symlinks: the link has to work once they're gone
+        if (home / "site").exists():
+            (home / "site").rename(old)
+        new.rename(home / "site")
+    finally:
+        shutil.rmtree(new, ignore_errors=True)
+        shutil.rmtree(old, ignore_errors=True)
+
+    now = time.time()
+    meta = meta_of(slug) if existing else {"created": now}
+    meta.update(title=args.title or page_title(home / "site" / "index.html") or meta.get("title") or src.stem,
+                source=str(src), updated=now, thread=os.environ.get("AGENTD_THREAD_ID"))
+    (home / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    print(url(slug))
+
+
+def shot(args) -> None:
+    slug = slug_of(args.link)
+    browsers = glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/*/*headless*shell"))
+    if not browsers:
+        sys.exit("no headless browser: expected Playwright's chromium_headless_shell in ~/.cache/ms-playwright")
+    png = os.path.abspath(args.output or f"/tmp/artifact-{slug}.png")
+    done = subprocess.run([sorted(browsers)[-1], "--no-sandbox", "--hide-scrollbars", "--force-device-scale-factor=2",
+                           f"--window-size={args.width},{args.height}", "--virtual-time-budget=5000", f"--screenshot={png}",
+                           url(slug)], capture_output=True, text=True, timeout=60)
+    if done.returncode or not os.path.isfile(png):
+        sys.exit(done.stderr[-500:] or "the browser failed")
+    print(png)
+
+
+def list_all(args) -> None:
+    found = [(meta_of(p.parent.name), p.parent.name) for p in ROOT.glob("*/meta.json")]
+    for meta, slug in sorted(found, key=lambda item: item[0]["updated"], reverse=True):
+        print(f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(meta['updated']))}  {url(slug)}  {meta['title']}")
+
+
+def remove(args) -> None:
+    for slug in [slug_of(ref) for ref in args.artifacts]:
+        shutil.rmtree(ROOT / slug)
+        print(f"removed {slug}")
+
+
+parser = argparse.ArgumentParser(description=__doc__)
+commands = parser.add_subparsers(required=True, metavar="COMMAND")
+cmd = commands.add_parser("publish", help="publish a directory with an index.html, or one .html file; prints the link")
+cmd.add_argument("path")
+cmd.add_argument("--title", help="name in `list` (default: the page's <title>)")
+cmd.add_argument("--update", metavar="LINK", help="replace this artifact (publishing the same path again already does)")
+cmd.add_argument("--new", action="store_true", help="make a new link even if this path was published before")
+cmd.set_defaults(run=publish)
+cmd = commands.add_parser("shot", help="screenshot an artifact, at phone width by default; prints the PNG's path")
+cmd.add_argument("link")
+cmd.add_argument("-o", "--output", help="where to write the PNG")
+cmd.add_argument("--width", type=int, default=390, help="window width in px (default: a phone; 1440 for a computer)")
+cmd.add_argument("--height", type=int, default=844, help="px of the page to capture (default: one phone screen)")
+cmd.set_defaults(run=shot)
+cmd = commands.add_parser("list", help="every artifact, newest first")
+cmd.set_defaults(run=list_all)
+cmd = commands.add_parser("rm", help="delete artifacts; their links stop working")
+cmd.add_argument("artifacts", nargs="+", metavar="LINK")
+cmd.set_defaults(run=remove)
+args = parser.parse_args()
+args.run(args)

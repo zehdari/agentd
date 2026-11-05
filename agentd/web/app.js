@@ -4,12 +4,12 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 // The current page. Links switch pages in place (no reload), so these change; see navigate().
 let AGENT_ID = null, SYSTEM = false, SECTION = null;
-const SECTION_TITLES = { usage: "Usage", jobs: "Jobs", files: "Files", machine: "Machine", desktop: "Desktop", settings: "Settings" };
+const SECTION_TITLES = { usage: "Usage", jobs: "Jobs", files: "Files", artifacts: "Artifacts", machine: "Machine", desktop: "Desktop", settings: "Settings" };
 function parseRoute() {
   const m = location.pathname.match(/^\/agents\/(\d+)/);
   AGENT_ID = m ? m[1] : null;
   SYSTEM = location.pathname === "/system";
-  const s = location.pathname.match(/^\/(usage|jobs|files|machine|desktop|settings)$/);   // the desktop rail's own pages
+  const s = location.pathname.match(/^\/(usage|jobs|files|artifacts|machine|desktop|settings)$/);   // the desktop rail's own pages
   SECTION = s ? s[1] : null;
 }
 parseRoute();
@@ -296,6 +296,7 @@ const ICONS = {
   agents: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
   jobs: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   files: '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/>',
+  artifacts: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
   desktop: '<rect x="3" y="4" width="18" height="12" rx="1"/><path d="m10 8 4 2-4 2z"/><path d="M8 20h8M12 16v4"/>',
   machine: '<rect x="3" y="4" width="18" height="12" rx="1"/><path d="M8 20h8M12 16v4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -495,6 +496,7 @@ function renderTopbar() {
   }
   const left = AGENT_ID ? `<a class="back" href="/">${icon("back")}<span>Agents</span></a>` : `<h1>Agents</h1>`;
   $("#topbar").innerHTML = `${left}
+    <a class="icon-btn system-btn" href="/artifacts" aria-label="Artifacts" title="Artifacts">${icon("artifacts")}</a>
     <a class="icon-btn system-btn" href="/desktop" aria-label="Remote desktop" title="Remote desktop">${icon("desktop")}</a>
     <a class="icon-btn system-btn" href="/system" aria-label="System: usage, machine, files" title="System">${icon("system")}</a>
     <button class="btn primary new-btn" type="button" id="new-toggle" aria-expanded="${ui.newOpen}">${icon("plus")}<span>New agent</span></button>`;
@@ -704,6 +706,20 @@ function filesSection(files) {
     <h2 id="f-h">Sent to you</h2>
     ${files.length ? `<ul class="list">${files.map(f => fileItem(f)).join("")}</ul>`
       : `<p class="empty">Files agents send with <code>agentd-send</code> show up here.</p>`}
+  </section>`;
+}
+
+function artifactItem(a, withAgent = true) {
+  const meta = [withAgent && a.agent ? `<a href="/agents/${a.agent}">${esc(a.agent_title)}</a>` : "", esc(when(a.t))].filter(Boolean).join(" · ");
+  return `<li data-k="a:${a.slug}">${icon("artifacts", "i ft")}<div>
+    <a class="fname" href="/a/${a.slug}/" data-view="artifact" data-name="${esc(a.title)}">${esc(a.title)}</a><span class="sub">${meta}</span></div></li>`;
+}
+
+function artifactsSection(artifacts) {
+  return `<section class="files" aria-labelledby="art-h">
+    <h2 id="art-h">Pages from agents</h2>
+    ${artifacts.length ? `<ul class="list">${artifacts.map(a => artifactItem(a)).join("")}</ul>`
+      : `<p class="empty">Pages agents publish with <code>agentd-artifact</code> show up here.</p>`}
   </section>`;
 }
 
@@ -955,6 +971,7 @@ function renderSection(d) {
     usage: () => usageSection(d.usage, d.now),
     jobs: () => jobsSection(d.jobs, d.now),
     files: () => filesSection(d.files),
+    artifacts: () => artifactsSection(d.artifacts),
     machine: () => machineSection(d.machine, d.now, d.window, { w: 900, h: 120 }),
     desktop: () => `<div class="settings">${desktopSection()}</div>`,
     settings: () => `<div class="settings">${pushSection()}${discordSection()}${voiceSection()}${appearanceSection()}</div>`,
@@ -1237,6 +1254,8 @@ function detailsHtml(d) {
         : `<p class="empty">No activity · last ${esc(when(d.updated))}</p>`}</section>
     <section aria-labelledby="dj-h"><h2 id="dj-h">Jobs started</h2>
       ${d.jobs.length ? `<ul class="list">${d.jobs.map(j => jobRow(j, d.now, true)).join("")}</ul>` : `<p class="empty">None in the last day.</p>`}</section>
+    ${d.artifact_list && d.artifact_list.length ? `<section aria-labelledby="da-h"><h2 id="da-h">Artifacts</h2>
+      <ul class="list">${d.artifact_list.map(a => artifactItem(a, false)).join("")}</ul></section>` : ""}
     <section aria-labelledby="df-h"><h2 id="df-h">Files sent</h2>
       ${d.file_list.length ? `<ul class="list">${d.file_list.map(f => fileItem(f, false)).join("")}</ul>` : `<p class="empty">None yet.</p>`}</section>
     ${d.resume ? `<section aria-labelledby="ds-h"><h2 id="ds-h">Continue at the machine</h2>
@@ -1851,6 +1870,8 @@ loadModels();
 // ------------------------------------------------------------------ file viewer
 // Files open over the page, not in a new tab: in the home-screen app a new tab has no way back.
 
+const ARTIFACT_SANDBOX = "allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
+
 function openViewer(href, name, kind) {
   let dlg = $("#viewer");
   if (!dlg) {
@@ -1865,13 +1886,17 @@ function openViewer(href, name, kind) {
     });
   }
   const pdf = kind === "file" && /\.pdf$/i.test(name);
+  const artifact = kind === "artifact", page = artifact || kind === "link", theme = document.documentElement.dataset.theme;
   const body = kind === "image" ? `<img src="${href}" alt="${esc(name)}">`
     : pdf ? `<div class="pdf-pages"><p class="pdf-note">Loading…</p></div>`
+    : artifact ? `<iframe src="${href}?theme=${theme}" style="color-scheme: ${theme}" title="${esc(name)}" sandbox="${ARTIFACT_SANDBOX}"></iframe>`
     : `<iframe src="${href}" title="${esc(name)}"></iframe>`;
-  dlg.innerHTML = `<div class="viewer-bar"><span>${esc(name)}</span>
-      <a class="icon-btn" href="${href}" download="${esc(name)}" aria-label="Download">${icon("download")}</a>
+  const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches;
+  const action = !page ? `<a class="icon-btn" href="${href}" download="${esc(name)}" aria-label="Download">${icon("download")}</a>`
+    : standalone ? "" : `<a class="icon-btn" href="${href}" target="_blank" rel="noopener" aria-label="Open in a new tab" title="Open in a new tab">${icon("ext")}</a>`;
+  dlg.innerHTML = `<div class="viewer-bar"><span>${esc(name)}</span>${action}
       <button class="icon-btn" type="button" id="viewer-close" aria-label="Close">${icon("close")}</button></div>
-    <div class="viewer-body${pdf ? " pdf" : ""}" tabindex="-1" autofocus>${body}</div>`;
+    <div class="viewer-body${pdf ? " pdf" : ""}${page ? " page" : ""}" tabindex="-1" autofocus>${body}</div>`;
   dlg.showModal();
   history.pushState({ viewer: true }, "");   // so the back gesture closes it
   if (pdf) showPdf(dlg.querySelector(".pdf-pages"), new URL(href, location.href).searchParams.get("path"));
@@ -1898,7 +1923,26 @@ addEventListener("popstate", () => {
   const dlg = $("#viewer");
   if (dlg && dlg.open) { history.replaceState(null, ""); dlg.close(); }
 });
+// Links to this site that would leave the dashboard: in the home-screen app they open with no way
+// back, so they open over the page. Other sites get the phone's own browser, which has a way back.
+function ownLink(a) {
+  if (a.target !== "_blank" || a.closest("#viewer")) return null;
+  const url = new URL(a.href, location.href);
+  return url.origin === location.origin || url.hostname === "agentd.zehdari.com" ? url : null;
+}
 document.addEventListener("click", e => {
+  const link = e.target.closest("a[href]:not([data-view])");
+  const url = link && ownLink(link);
+  if (url) {
+    e.preventDefault();
+    const path = url.pathname + url.search + url.hash;
+    const artifact = url.pathname.match(/^\/a\/([a-z2-7]{24})\/?$/);
+    const known = artifact && ((ui.data && (ui.data.artifacts || ui.data.artifact_list)) || []).find(x => x.slug === artifact[1]);
+    if (url.pathname === "/" || url.pathname.startsWith("/agents/")) location.href = path;   // the dashboard itself
+    else if (artifact) openViewer(url.pathname, known ? known.title : "Artifact", "artifact");
+    else openViewer(path, decodeURIComponent(url.pathname), "link");
+    return;
+  }
   const a = e.target.closest("a[data-view]");
   if (a && "recheck" in a.dataset) {
     e.preventDefault();

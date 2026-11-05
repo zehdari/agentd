@@ -62,6 +62,9 @@ uv pip install -q --python "$AGENTS/.venv/bin/python" -r "$AGENTS/requirements.t
 mkdir -p "$HOME/.local/bin"
 ln -sf "$AGENTS/bin/agentd-send" "$HOME/.local/bin/agentd-send"
 ln -sf "$AGENTS/bin/agentd-say" "$HOME/.local/bin/agentd-say"
+ln -sf "$AGENTS/bin/agentd-artifact" "$HOME/.local/bin/agentd-artifact"
+mkdir -p "$HOME/.claude/skills"
+ln -sfn "$AGENTS/skills/agentd-artifact" "$HOME/.claude/skills/agentd-artifact"
 
 step "Text-to-speech for agentd-say (Kokoro)"
 if [ ! -x "$AGENTS/tts/.venv/bin/python" ]; then
