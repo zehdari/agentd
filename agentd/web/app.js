@@ -1678,12 +1678,7 @@ document.addEventListener("click", e => {
   } else if (t.id === "theme" || t.dataset.themeSet) {
     const order = ["auto", "light", "dark"];
     const cur = localStorage.getItem("agentd-theme") || "auto";
-    const next = t.dataset.themeSet || order[(order.indexOf(cur) + 1) % 3];
-    localStorage.setItem("agentd-theme", next);
-    const dark = next === "dark" || (next === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-    renderTheme();
-    if (SYSTEM || SECTION) rerender();
+    setTheme(t.dataset.themeSet || order[(order.indexOf(cur) + 1) % 3]);
   } else if (t.dataset.voiceAuto) {
     localStorage.setItem("agentd-voice-auto", t.dataset.voiceAuto === "true" ? "on" : "off");
     rerender();
@@ -1831,6 +1826,14 @@ for (const type of ["dragenter", "dragover", "dragleave", "drop"]) {
   });
 }
 
+function setTheme(next) {
+  localStorage.setItem("agentd-theme", next);
+  const dark = next === "dark" || (next === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  renderTheme();
+  if (SYSTEM || SECTION) rerender();
+}
+
 function renderTheme() {
   const cur = localStorage.getItem("agentd-theme") || "auto";
   $("#theme").innerHTML = `${icon(cur === "auto" ? "auto" : cur === "dark" ? "moon" : "sun", "i i-sm")}<span>Theme: ${cur}</span>`;
@@ -1852,12 +1855,12 @@ function renderRailToggle() {
   b.setAttribute("aria-expanded", !hidden);
 }
 renderRailToggle();
-$("#rail-toggle").addEventListener("click", () => {
-  const hide = document.documentElement.dataset.rail !== "hidden";
+$("#rail-toggle").addEventListener("click", () => setRail(document.documentElement.dataset.rail !== "hidden"));
+function setRail(hide) {
   if (hide) document.documentElement.dataset.rail = "hidden"; else delete document.documentElement.dataset.rail;
   try { localStorage.setItem("agentd-rail", hide ? "hidden" : "shown"); } catch { /* full */ }
   renderRailToggle();
-});
+}
 if (!AGENT_ID && cache.overview) {   // last known state while the first fetch is in flight
   ui.data = cache.overview;
   renderShell(cache.overview);
@@ -1889,13 +1892,14 @@ function openViewer(href, name, kind) {
   const artifact = kind === "artifact", page = artifact || kind === "link", theme = document.documentElement.dataset.theme;
   const body = kind === "image" ? `<img src="${href}" alt="${esc(name)}">`
     : pdf ? `<div class="pdf-pages"><p class="pdf-note">Loading…</p></div>`
-    : artifact ? `<iframe src="${href}?theme=${theme}" style="color-scheme: ${theme}" title="${esc(name)}" sandbox="${ARTIFACT_SANDBOX}"></iframe>`
+    : artifact ? `<iframe src="${href}?theme=${localStorage.getItem("agentd-theme") || "auto"}&rail=${document.documentElement.dataset.rail === "hidden" ? "hidden" : "shown"}" style="color-scheme: ${theme}" title="${esc(name)}" sandbox="${ARTIFACT_SANDBOX}"></iframe>`
     : `<iframe src="${href}" title="${esc(name)}"></iframe>`;
   const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches;
   const action = !page ? `<a class="icon-btn" href="${href}" download="${esc(name)}" aria-label="Download">${icon("download")}</a>`
     : standalone ? "" : `<a class="icon-btn" href="${href}" target="_blank" rel="noopener" aria-label="Open in a new tab" title="Open in a new tab">${icon("ext")}</a>`;
-  dlg.innerHTML = `<div class="viewer-bar"><span>${esc(name)}</span>${action}
-      <button class="icon-btn" type="button" id="viewer-close" aria-label="Close">${icon("close")}</button></div>
+  dlg.innerHTML = `<div class="viewer-bar">
+      <button class="icon-btn" type="button" id="viewer-close" aria-label="Back" title="Back">${icon("back")}</button>
+      <span>${esc(name)}</span>${action}</div>
     <div class="viewer-body${pdf ? " pdf" : ""}${page ? " page" : ""}" tabindex="-1" autofocus>${body}</div>`;
   dlg.showModal();
   history.pushState({ viewer: true }, "");   // so the back gesture closes it
@@ -1923,6 +1927,16 @@ addEventListener("popstate", () => {
   const dlg = $("#viewer");
   if (dlg && dlg.open) { history.replaceState(null, ""); dlg.close(); }
 });
+// An artifact's own theme and sidebar buttons are the dashboard's settings too.
+addEventListener("message", e => {
+  const frame = $("#viewer iframe");
+  const set = frame && e.source === frame.contentWindow && e.data && e.data.agentd;
+  if (!set) return;
+  if (["auto", "light", "dark"].includes(set.theme) && set.theme !== (localStorage.getItem("agentd-theme") || "auto")) setTheme(set.theme);
+  if (set.rail === "hidden" || set.rail === "shown") setRail(set.rail === "hidden");
+  frame.style.colorScheme = document.documentElement.dataset.theme;
+});
+
 // Links to this site that would leave the dashboard: in the home-screen app they open with no way
 // back, so they open over the page. Other sites get the phone's own browser, which has a way back.
 function ownLink(a) {

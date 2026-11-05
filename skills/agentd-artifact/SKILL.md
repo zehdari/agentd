@@ -26,7 +26,7 @@ Hosting ends there. Don't start a server, edit Caddy, add a systemd unit, open a
 
 ## Writing the page
 
-The template loads agentd's theme, so pages match the dashboard in light and dark and fill the width on a computer. Keep its two `/a/theme/` lines and don't write your own colours, fonts or layout. Everything below is already styled:
+The template loads agentd's theme, so pages match the dashboard in light and dark and fill the width on a computer. Keep its two `/a/theme/` lines and don't write your own colours, fonts or layout. The sidebar's collapse button and theme button are added for you. Everything below is already styled:
 
 | Use | Markup |
 |---|---|
@@ -35,7 +35,8 @@ The template loads agentd's theme, so pages match the dashboard in light and dar
 | Key numbers | `.cards` of `.card`, each `<b>` then `<span>`; add `.good`, `.bad` or `.key` to a card |
 | The one thing to act on | `<div class="callout">` |
 | Two things side by side | `<section class="split">` with two children |
-| Charts and images | `<figure>` with `<figcaption>` |
+| Charts and images | `<figure>` with `<figcaption>`; they stay under a screen tall on a computer |
+| Several charts | `<div class="figures">` of `<figure>`s, a row on a computer |
 | Tables | `<div class="table"><table>` |
 | Small print, numbers | `.note`, `.mono` |
 

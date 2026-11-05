@@ -810,7 +810,7 @@ pre.code code { background: none; padding: 0; }
 .viewer[open] { display: flex; }
 .viewer::backdrop { background: transparent; }
 .viewer-bar {
-  display: flex; align-items: center; gap: 6px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px 18px;
+  display: flex; align-items: center; gap: 6px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px 13px;
 }
 .viewer-bar span { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .viewer-bar .icon-btn { color: #e4e9ee; width: 40px; height: 40px; }
